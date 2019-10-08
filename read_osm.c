@@ -2,24 +2,28 @@
 #include <stdlib.h>
 #include <assert.h>
 #include <string.h>
+#include <math.h>
 
-#define MAX_string_buffer_len 256
-#define MAX_pointer_buffers 4
+#define MAX_string_buffer_len 65536
+#define MAX_pointer_buffers 8
 #define MAX_nodes ((int) 1e6)
+#define EARTH_RADIUS 6371009
 
 typedef struct node {
-    long long id;
-    int node2ind;
+    long long node2id;
+    int node2ind, color;
+    void *active;
     double lat, lon;
 } node;
 
 typedef struct edge {
-    long long id;
+    long long way;
     struct node *from, *to;
+    double weight;
 } edge;
 
 typedef struct network {
-    int node_count, edge_count;
+    int node_count, edge_count, greatest_component;
     node **ind2node;
     struct bst_node *id2node;
     struct adjacent_node **adjacent_lists;
@@ -35,6 +39,11 @@ typedef struct bst_node {
     struct bst_node *left, *right;
     int h, s;
 } bst_node;
+
+typedef struct heap_node {
+    node *n;
+    struct heap_node *child, *sibling;
+} heap_node;
 
 bst_node *BST_NULL;
 void ***pointer_buffers;
@@ -132,10 +141,10 @@ void traverse_bst(bst_node *root, bst_node **queue, int *tail) {
 
 void free_bst(bst_node *root) {
     bst_node **queue = (bst_node **) new_buffer();
-    int head, tail;
+    int head, tail = 0;
     traverse_bst(root, queue, & tail);
     for (head = 0; head < tail; head ++) 
-        free(queue[head]);
+        free_bst_node(queue[head]);
     free_buffer((void **) queue);
 }
 
@@ -188,7 +197,7 @@ bst_node *bst_insert(bst_node *root, node *n) {
         bst_node *temp = new_bst_node(n);
         return temp;
     }
-    if (n->id < root->n->id)
+    if (n->node2id < root->n->node2id)
         root->left = bst_insert(root->left, n);
     else
         root->right = bst_insert(root->right, n);
@@ -200,9 +209,9 @@ bst_node *bst_insert(bst_node *root, node *n) {
 bst_node *bst_search(bst_node *root, long long id) {
     if (root == BST_NULL) 
         return NULL;
-    if (id == root->n->id) 
+    if (id == root->n->node2id) 
         return root;
-    if (id < root->n->id) 
+    if (id < root->n->node2id) 
         return bst_search(root->left, id);
     else 
         return bst_search(root->right, id);
@@ -222,10 +231,10 @@ void clear_network() {
 node *new_node(long long id, double lat, double lon) {
     node *n = (node *) malloc(sizeof(node));
     node_count ++;
-    n->id = id;
+    n->node2id = id;
     n->lat = lat;
     n->lon = lon;
-    //printf("%lld %lf %lf\n", id, lat, lon);
+    n->active = NULL;
     return n;
 }
 
@@ -234,13 +243,21 @@ void free_node(node *n) {
     node_count --;
 }
 
-edge *new_edge(long long id, node *from, node *to) {
+double dist(node *a, node *b) {
+	//spherical law of cosines
+	double t = sin(a->lat) * sin(b->lat) 
+        + cos(a->lat) * cos(b->lat) * cos(a->lon - b->lon);
+	assert(t <= 1);
+	return EARTH_RADIUS * sqrt(2 - 2 * t);
+}
+
+edge *new_edge(long long way, node *from, node *to) {
     edge *e = (edge *) malloc(sizeof(edge));
     edge_count ++;
-    e->id = id;
+    e->way = way;
     e->from = from;
     e->to = to;
-    //printf("%lld %d %d\n", id, e->from->node2ind, e->to->node2ind);
+    e->weight = dist(from, to);
     return e;
 }
 
@@ -263,12 +280,10 @@ void free_adjacent_node(adjacent_node *adj) {
     adjacent_node_count --;
 }
 
-network *new_network(const char *name) {
-    FILE *fin = fopen(name, "r");
-    char *s = string_buffer;
-    s[0] = '$';
-    network *net = (network *) malloc(sizeof(network));
+void new_nodes_from(network *net, FILE *fin) {
     net->id2node = new_bst();
+    char *s = string_buffer;
+    s[0] = 0;
     while (strcmp(s, "<way") != 0) {
         fscanf(fin, "%s", s);
         long long id;
@@ -297,6 +312,17 @@ network *new_network(const char *name) {
         net->ind2node[head] = n;
     }
     free_buffer((void **) queue);
+}
+
+void connect_nodes(network *net, long long way, node *from, node *to) {
+    edge *e = new_edge(way, from, to);
+    adjacent_node *adj = new_adjacent_node(e);
+    adj->next = net->adjacent_lists[from->node2ind];
+    net->adjacent_lists[from->node2ind] = adj;
+    net->edge_count ++;
+}
+
+void new_edges_from(network *net, FILE *fin) {
     net->adjacent_lists = (adjacent_node **) malloc(
         sizeof(adjacent_node *) * net->node_count);
     int i;
@@ -304,15 +330,17 @@ network *new_network(const char *name) {
         net->adjacent_lists[i] = NULL;
     net->edge_count = 0;
     node **stack = (node **) new_buffer();
-    int top = 0;
+    int top;
+    char *s = string_buffer;
+    s[0] = 0;
     while (strcmp(s, "<relation") != 0) {
         fscanf(fin, "%s", s);
-        int oneway = 0;
-        long long id, node_id;
+        int oneway = 0, highway = 0;
+        long long way_id, node_id;
         top = 0;
         while (strcmp(s, "<relation") != 0 && strcmp(s, "<way") != 0) {
             if (s[0] == 'i' && s[1] == 'd') 
-                sscanf(s, "id=\"%lld\"", & id);
+                sscanf(s, "id=\"%lld\"", & way_id);
             if (strcmp(s, "<nd") == 0) {
                 fscanf(fin, "%s", s);
                 sscanf(s, "ref=\"%lld\"", & node_id);
@@ -321,33 +349,80 @@ network *new_network(const char *name) {
             }
             if (strcmp(s, "<tag") == 0) {
                 fscanf(fin, "%s", s);
+                highway |= strcmp(s, "k=\"highway\"") == 0;
                 if (strcmp(s, "k=\"oneway\"") == 0) {
                     fscanf(fin, "%s", s);
-                    if (strcmp(s, "v=\"yes\"/>") != 0) 
-                        oneway = 1;
+                    oneway |= strcmp(s, "v=\"yes\"/>") != 0;
                 }
             }
             fscanf(fin, "%s", s);
         }
-        while (top > 1) {
-            node *to = stack[-- top];
-            node *from = stack[top - 1];
-            edge *e = new_edge(id, from, to);
-            adjacent_node *adj = new_adjacent_node(e);
-            adj->next = net->adjacent_lists[from->node2ind];
-            net->adjacent_lists[from->node2ind] = adj;
-            net->edge_count ++;
-            if (oneway == 0) {
-                edge *e = new_edge(id, to, from);
-                adjacent_node *adj = new_adjacent_node(e);
-                adj->next = net->adjacent_lists[to->node2ind];
-                net->adjacent_lists[to->node2ind] = adj;
-                net->edge_count ++;
+        if (highway == 1) {
+            while (top > 1) {
+                node *to = stack[-- top];
+                node *from = stack[top - 1];
+                connect_nodes(net, way_id, from, to);
+                if (oneway == 0) {
+                    connect_nodes(net, way_id, to, from);
+                }
             }
         }
     }
-    printf("%d %d\n", net->node_count, net->edge_count);
+    free_buffer((void **) stack);
+}
+
+int traverse_network_from(network *net, node *source, node **queue) {
+    int head = 0, tail = 0;
+    queue[tail ++] = source;
+    source->active = 1;
+    while (head < tail) {
+        node *cur = queue[head ++];
+        adjacent_node *p = net->adjacent_lists[cur->node2ind];
+        while (p != NULL) {
+            edge *e = p->e;
+            node *to = e->to;
+            if (to->active == NULL) {
+                to->active = 1;
+                queue[tail ++] = to;
+            }
+            p = p->next;
+        }
+    }
+    return tail;
+}
+
+void mark_components(network *net) {
+    node **queue = (node **) new_buffer();
+    int i, sum, max, argmax, count;
+    for (i = 0, sum = 0, max = 0, count = 0; i < net->node_count; i ++) {
+        if (net->ind2node[i]->active == NULL) {
+            int tail = traverse_network_from(net, net->ind2node[i], queue);
+            int j;
+            for (j = 0; j < tail; j ++) 
+                queue[j]->color = count;
+            count ++;
+            sum += tail;
+            if (tail > max) {
+                max = tail;
+                argmax = i;
+            }
+        }
+    }
+    assert(sum == net->node_count);
+    net->greatest_component = net->ind2node[argmax]->color;
+    for (i = 0; i < net->node_count; i ++)
+        net->ind2node[i]->active = NULL;
+    free_buffer((void **) queue);
+}
+
+network *new_network_from(const char *name) {
+    FILE *fin = fopen(name, "r");
+    network *net = (network *) malloc(sizeof(network));
+    new_nodes_from(net, fin);
+    new_edges_from(net, fin);
     fclose(fin);
+    mark_components(net);
+    return net;
 }
 
 void free_network(network *net) {
@@ -363,27 +438,82 @@ void free_network(network *net) {
     }
     free(net->adjacent_lists);
     for (i = 0; i < net->node_count; i ++) 
-        free(net->ind2node[i]);
+        free_node(net->ind2node[i]);
     free(net->ind2node);
     free_bst(net->id2node);
     free(net);
 }
 
+heap_node *new_heap_node() {
+    
+    heap_node_count ++;
+}
+
+void link_to_parent(
+    node *n0, node *n, double temp, node **parent, double *dist) 
+{
+    parent[n0->node2ind] = n;
+    dist[n0->node2ind] = temp;
+}
+
+void shortest_paths_from(
+    network *net, node *source, node **parent, double *dist) 
+{
+    heap_node *root = NULL;
+    link_to_parent(source, NULL, 0, parent, dist);
+    source->active = heap_insert(root, source);
+    while (root != NULL) {
+        node *n = extract_min(root);
+        n->active = NULL;
+        adjacent_node *p = net->adjacent_lists[n->node2ind];
+        while (p != NULL) {
+            edge *e = p->e;
+            node *n0 = e->to;
+            double temp = dist[n->node2ind] + e->weight;
+            if (n0->active == NULL) {
+                link_to_parent(n0, n, temp, parent, dist);
+                n0->active = heap_insert(root, n0);
+            }
+            else {
+                if (temp < dist[n0->node2ind]) {
+                    link_to_parent(n0, n, temp, parent, dist);
+                    n0->active = dcrease_key(root, n0, temp);
+                }
+            }
+            p = p->next;
+        }
+    }
+}
+
+void shortest_paths(network *net) {
+    int i;
+    node **parent = (node **) new_buffer();
+    double *dist = (double *) malloc(sizeof(double) * net->node_count);
+    for (i = 0; i < net->node_count; i ++) {
+        node *n = net->ind2node[i];
+        if (n->color == net->greatest_component) {
+            shortest_paths_from(net, n, parent, dist);
+        }
+    }
+}
+
 void init() {
-    init_bst();
     init_pointer_buffers();
+    init_bst();
     init_network();
+    printf("inited\n");
 }
 
 void clear() {
+    clear_network();
     clear_bst();
     clear_pointer_buffers();
-    clear_network();
+    printf("clear\n");
 }
 
 void test() {
-    network *net = new_network("map.osm");
-    printf("%d %d\n", net->node_count, net->edge_count);
+    network *net = new_network_from("map-beijing.osm");
+    shortest_paths(net);
     free_network(net);
 }
 
