@@ -7,12 +7,13 @@
 
 #define MAX_string_buffer_len 65536
 #define MAX_pointer_buffers 8
-#define MAX_nodes ((int) 1e6)
+#define MAX_nodes ((int) 1e7)
 #define EARTH_RADIUS 6371009
+#define PI 3.14159265359
 
 typedef struct node {
     long long node2id;
-    int node2ind, color;
+    int node2ind, color, in, out;
     void *active;
     double lat, lon;
 } node;
@@ -46,6 +47,12 @@ typedef struct heap_node {
     double key;
     struct heap_node *head, *next, *prev;
 } heap_node;
+
+typedef struct sp_vector {
+    double *dist;
+    node **parent;
+    network *net;
+} sp_vector;
 
 bst_node *BST_NULL;
 void ***pointer_buffers;
@@ -235,8 +242,9 @@ node *new_node(long long id, double lat, double lon) {
     node *n = (node *) malloc(sizeof(node));
     node_count ++;
     n->node2id = id;
-    n->lat = lat;
-    n->lon = lon;
+    n->lat = lat * PI / 180;
+    n->lon = lon * PI / 180;
+    n->in = n->out = 0;
     n->active = NULL;
     return n;
 }
@@ -314,6 +322,7 @@ void new_nodes_from(network *net, FILE *fin) {
         n->node2ind = head;
         net->ind2node[head] = n;
     }
+    printf("network: %d nodes\n", net->node_count);
     free_buffer((void **) queue);
 }
 
@@ -323,6 +332,8 @@ void connect_nodes(network *net, long long way, node *from, node *to) {
     adj->next = net->adjacent_lists[from->node2ind];
     net->adjacent_lists[from->node2ind] = adj;
     net->edge_count ++;
+    from->out ++;
+    to->in ++;
 }
 
 void new_edges_from(network *net, FILE *fin) {
@@ -371,6 +382,7 @@ void new_edges_from(network *net, FILE *fin) {
             }
         }
     }
+    printf("network: %d edges\n", net->edge_count);
     free_buffer((void **) stack);
 }
 
@@ -415,6 +427,47 @@ void mark_components(network *net) {
     net->greatest_component = net->ind2node[argmax]->color;
     for (i = 0; i < net->node_count; i ++)
         net->ind2node[i]->active = NULL;
+    printf("greatest component: %d nodes\n", max);
+    free_buffer((void **) queue);
+}
+
+void simplify(network *net) {
+    int i, count = 0;
+    for (i = 0; i < net->node_count; i ++) {
+        node *n = net->ind2node[i];
+        if (n->color == net->greatest_component && 
+            n->in == n->out && n->out == 2) 
+        {
+            node *a = net->adjacent_lists[i]->e->to;
+            node *b = net->adjacent_lists[i]->next->e->to;
+            if (a == b) continue;
+            adjacent_node *p = net->adjacent_lists[a->node2ind];
+            while (p != NULL) {
+                edge *e = p->e;
+                if (e->to == n) break;
+                p = p->next;
+            }
+            adjacent_node *q = net->adjacent_lists[b->node2ind];
+            while (q != NULL) {
+                edge *e = q->e;
+                if (e->to == n) break;
+                q = q->next;
+            }
+            if (p != NULL && q != NULL) {
+                p->e->to = b;
+                q->e->to = a;
+                n->color = -1;
+                count ++;
+            }
+        }
+    }
+    printf("redundancy: %d nodes\n", count);
+    for (i = 0; i < net->node_count; i ++) 
+        if (net->ind2node[i]->color == net->greatest_component) 
+            break;
+    node **queue = (node **) new_buffer();
+    int tail = traverse_network_from(net, net->ind2node[i], queue);
+    printf("simplified: %d nodes\n", tail);
     free_buffer((void **) queue);
 }
 
@@ -425,6 +478,7 @@ network *new_network_from(const char *name) {
     new_edges_from(net, fin);
     fclose(fin);
     mark_components(net);
+    //simplify(net);
     printf("loaded\n");
     return net;
 }
@@ -555,40 +609,39 @@ heap_node *heap_insert(heap_node *h0, node *n, double key) {
     return heap_merge(h0, h1);
 }
 
-void heap_test() {
-    heap_node *heap = NULL;
-    node **temp = (node **) new_buffer();
-    int i, N = 10000;
-    for (i = 0; i < N; i ++) {
-        temp[i] = new_node(0, 0, 0);
-        heap = heap_insert(heap, temp[i], rand());
-        int key = (int) heap->key;
-    }
-    for (i = N - 1; i >= 0; i --) {
-        heap_node *h = (heap_node *) temp[i]->active;
-        heap = decrease_key(heap, h, - h->key - 1);
-    }
-    for (i = 0; i < N; i ++) {
-        node *temp = heap->n;
-        int key = (int) heap->key;
-        heap = extract_min(heap);
-        free_node(temp);
-    }
-    free_buffer((void **) temp);
+void link_to_parent(sp_vector *sp, node *n0, node *n, double temp) 
+{
+    sp->parent[n0->node2ind] = n;
+    sp->dist[n0->node2ind] = temp;
 }
 
-void link_to_parent(
-    node *n0, node *n, double temp, node **parent, double *dist) 
-{
-    parent[n0->node2ind] = n;
-    dist[n0->node2ind] = temp;
+sp_vector *new_sp_vector(network *net) {
+    sp_vector *sp = (sp_vector *) malloc(sizeof(sp_vector));
+    sp->parent = (node **) malloc(sizeof(node *) * net->node_count);
+    sp->dist = (double *) malloc(sizeof(double) * net->node_count);
+    sp->net = net;
+    return sp;
+}
+
+void init_sp_vector(sp_vector *sp) {
+    int i;
+    for (i = 0; i < sp->net->node_count; i ++) {
+        sp->parent[i] = NULL;
+        sp->dist[i] = -1;
+    }
+}
+
+void free_sp_vector(sp_vector *sp) {
+    free(sp->parent);
+    free(sp->dist);
+    free(sp);
 }
 
 void shortest_paths_from(
-    network *net, node *source, node **parent, double *dist) 
+    network *net, node *source, sp_vector *sp) 
 {
     heap_node *heap = NULL;
-    link_to_parent(source, NULL, 0, parent, dist);
+    link_to_parent(sp, source, NULL, 0);
     heap = heap_insert(heap, source, 0);
     while (heap != NULL) {
         node *n = heap->n;
@@ -600,8 +653,8 @@ void shortest_paths_from(
             node *n0 = e->to;
             heap_node *h = (heap_node *) (n0->active);
             double temp = key + e->weight;
-            if (dist[n0->node2ind] < 0 || temp < dist[n0->node2ind]) {
-                link_to_parent(n0, n, temp, parent, dist);
+            if (sp->dist[n0->node2ind] < 0 || temp < sp->dist[n0->node2ind]) {
+                link_to_parent(sp, n0, n, temp);
                 if (h == NULL) 
                     heap = heap_insert(heap, n0, temp);
                 else 
@@ -615,29 +668,55 @@ void shortest_paths_from(
 
 void shortest_paths(network *net) {
     int i;
-    node **parent = (node **) new_buffer();
-    double *dist = (double *) malloc(sizeof(double) * net->node_count);
+    sp_vector *sp = new_sp_vector(net);
     for (i = 0; i < net->node_count; i ++) {
-        int j;
-        for (j = 0; j < net->node_count; j ++) {
-            parent[j] = NULL;
-            dist[j] = -1;
-        }
+        init_sp_vector(sp);
         node *n = net->ind2node[i];
         if (n->color == net->greatest_component) {
-            shortest_paths_from(net, n, parent, dist);
-            /*
-            for (j = 0; j < net->node_count; j ++) {
-                node *p = net->ind2node[j];
-                while (p != NULL) {
-                    printf("%d ", p->node2ind);
-                    p = parent[p->node2ind];
-                }
-                printf("\n");
-            }
-            */
+            shortest_paths_from(net, n, sp);
         }
     }
+    free_sp_vector(sp);
+}
+
+node *nearest_neighbor(network *net, node *n) {
+    int i;
+    double min = -1;
+    node *argmin = NULL;
+    for (i = 0; i < net->node_count; i ++) {
+        node *n0 = net->ind2node[i];
+        if (n0->color == net->greatest_component) {
+            double temp = dist(n0, n);
+            if (argmin == NULL || temp < min) {
+                min = temp;
+                argmin = n0;
+            }
+        }
+    }
+    printf("%lf\n", min);
+    return argmin;
+}
+
+double network_distance(network *net, 
+    double lat0, double lon0, double lat1, double lon1) 
+{
+    node *source = new_node(0, lat0, lon0);
+    node *target = new_node(0, lat1, lon1);
+    node *s0 = nearest_neighbor(net, source);
+    node *t0 = nearest_neighbor(net, target);
+    free_node(source);
+    free_node(target);
+    sp_vector *sp = new_sp_vector(net);
+    init_sp_vector(sp);
+    shortest_paths_from(net, s0, sp);
+    printf("great-circle distance: %lf (m)\n", dist(s0, t0));
+    printf("network distance: %lf (m)\n", sp->dist[t0->node2ind]);
+    node *p = t0;
+    while (p != NULL) {
+        printf("%d ", p->node2ind);
+        p = sp->parent[p->node2ind];
+    }
+    printf("\n");
 }
 
 void init() {
@@ -658,8 +737,10 @@ void clear() {
 }
 
 void test() {
-    network *net = new_network_from("map-beijing.osm");
-    shortest_paths(net);
+    network *net = new_network_from("map-shanghai.osm");
+    //shortest_paths(net);
+    double nd = network_distance(net,
+        31.2983874, 121.4996445, 31.1942597, 121.5944074);
     free_network(net);
 }
 
