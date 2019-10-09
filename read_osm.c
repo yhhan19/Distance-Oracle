@@ -3,6 +3,7 @@
 #include <assert.h>
 #include <string.h>
 #include <math.h>
+#include <time.h>
 
 #define MAX_string_buffer_len 65536
 #define MAX_pointer_buffers 8
@@ -42,12 +43,14 @@ typedef struct bst_node {
 
 typedef struct heap_node {
     node *n;
-    struct heap_node *child, *sibling;
+    double key;
+    struct heap_node *head, *next, *prev;
 } heap_node;
 
 bst_node *BST_NULL;
 void ***pointer_buffers;
-int *avail_pointer_buffer, max_buffers, bst_node_count, 
+int *avail_pointer_buffer, max_buffers,
+    bst_node_count, heap_node_count,
     node_count, edge_count, adjacent_node_count;
 char string_buffer[MAX_string_buffer_len];
 
@@ -374,16 +377,16 @@ void new_edges_from(network *net, FILE *fin) {
 int traverse_network_from(network *net, node *source, node **queue) {
     int head = 0, tail = 0;
     queue[tail ++] = source;
-    source->active = 1;
+    source->active = (void *) 1;
     while (head < tail) {
-        node *cur = queue[head ++];
-        adjacent_node *p = net->adjacent_lists[cur->node2ind];
+        node *n = queue[head ++];
+        adjacent_node *p = net->adjacent_lists[n->node2ind];
         while (p != NULL) {
             edge *e = p->e;
-            node *to = e->to;
-            if (to->active == NULL) {
-                to->active = 1;
-                queue[tail ++] = to;
+            node *n0 = e->to;
+            if (n0->active == NULL) {
+                n0->active = (void *) 1;
+                queue[tail ++] = n0;
             }
             p = p->next;
         }
@@ -422,6 +425,7 @@ network *new_network_from(const char *name) {
     new_edges_from(net, fin);
     fclose(fin);
     mark_components(net);
+    printf("loaded\n");
     return net;
 }
 
@@ -444,9 +448,133 @@ void free_network(network *net) {
     free(net);
 }
 
-heap_node *new_heap_node() {
-    
+void init_heap() {
+    heap_node_count = 0;
+}
+
+void clear_heap() {
+    assert(heap_node_count == 0);
+}
+
+heap_node *new_heap_node(node *n, double key) {
+    heap_node *h = (heap_node *) malloc(sizeof(heap_node));
     heap_node_count ++;
+    h->n = n;
+    h->key = key;
+    h->head = NULL;
+    h->next = h->prev = NULL;
+    n->active = (void *) h;
+    return h;
+}
+
+void free_heap_node(heap_node *h) {
+    h->n->active = NULL;
+    free(h);
+    heap_node_count --;
+}
+
+heap_node *heap_merge(heap_node *h0, heap_node *h1) {
+    if (h0 == NULL) 
+        return h1;
+    if (h1 == NULL) 
+        return h0;
+    if (h0->key < h1->key) {
+        h1->next = h0->head;
+        if (h0->head != NULL) 
+            h0->head->prev = h1;
+        h0->head = h1;
+        h1->prev = h0;
+        return h0;
+    }
+    else {
+        h0->next = h1->head;
+        if (h1->head != NULL) 
+            h1->head->prev = h0;
+        h1->head = h0;
+        h0->prev = h1;
+        return h1;
+    }
+}
+
+heap_node *extract_min(heap_node *h) {
+    heap_node *p = h->head, *q;
+    free_heap_node(h);
+    if (p == NULL) return NULL;
+    heap_node **queue = (heap_node **) new_buffer();
+    heap_node **stack = (heap_node **) new_buffer();
+    int head = 0, tail = 0, top;
+    while (p != NULL) {
+        queue[tail ++] = p;
+        p = p->next;
+        q = queue[tail - 1];
+        q->prev = q->next = NULL;
+    }
+    while (tail > 1) {
+        for (top = 0; head < tail; ) {
+            p = queue[head ++];
+            q = queue[head ++];
+            if (head == tail + 1) q = NULL;
+            stack[top ++] = heap_merge(p, q);
+        }
+        head = tail = 0;
+        while (top > 0) 
+            queue[tail ++] = stack[-- top];
+    }
+    free_buffer((void **) queue);
+    free_buffer((void **) stack);
+    return queue[0];
+}
+
+heap_node *decrease_key(heap_node *h0, heap_node *h1, double key) {
+    assert(key < h1->key);
+    if (h1->prev == NULL) {
+        assert(h0 == h1);
+        h0->key = key;
+        return h0;
+    }
+    else {
+        if (h1->prev->next == h1) {
+            h1->prev->next = h1->next;
+            if (h1->next != NULL) 
+                h1->next->prev = h1->prev;
+        }
+        else {
+            assert(h1->prev->head == h1);
+            h1->prev->head = h1->next;
+            if (h1->next != NULL) 
+                h1->next->prev = h1->prev;
+        }
+        h1->prev = h1->next = NULL;
+        h1->key = key;
+        return heap_merge(h0, h1);
+    }
+}
+
+heap_node *heap_insert(heap_node *h0, node *n, double key) {
+    heap_node *h1 = new_heap_node(n, key);
+    return heap_merge(h0, h1);
+}
+
+void heap_test() {
+    heap_node *heap = NULL;
+    node **temp = (node **) new_buffer();
+    int i, N = 10000;
+    for (i = 0; i < N; i ++) {
+        temp[i] = new_node(0, 0, 0);
+        heap = heap_insert(heap, temp[i], rand());
+        int key = (int) heap->key;
+    }
+    for (i = N - 1; i >= 0; i --) {
+        heap_node *h = (heap_node *) temp[i]->active;
+        heap = decrease_key(heap, h, - h->key - 1);
+    }
+    for (i = 0; i < N; i ++) {
+        node *temp = heap->n;
+        int key = (int) heap->key;
+        heap = extract_min(heap);
+        free_node(temp);
+    }
+    free_buffer((void **) temp);
 }
 
 void link_to_parent(
@@ -459,30 +587,30 @@ void link_to_parent(
 void shortest_paths_from(
     network *net, node *source, node **parent, double *dist) 
 {
-    heap_node *root = NULL;
+    heap_node *heap = NULL;
     link_to_parent(source, NULL, 0, parent, dist);
-    source->active = heap_insert(root, source);
-    while (root != NULL) {
-        node *n = extract_min(root);
-        n->active = NULL;
+    heap = heap_insert(heap, source, 0);
+    while (heap != NULL) {
+        node *n = heap->n;
+        double key = heap->key;
+        heap = extract_min(heap);
         adjacent_node *p = net->adjacent_lists[n->node2ind];
         while (p != NULL) {
             edge *e = p->e;
             node *n0 = e->to;
-            double temp = dist[n->node2ind] + e->weight;
-            if (n0->active == NULL) {
+            heap_node *h = (heap_node *) (n0->active);
+            double temp = key + e->weight;
+            if (dist[n0->node2ind] < 0 || temp < dist[n0->node2ind]) {
                 link_to_parent(n0, n, temp, parent, dist);
-                n0->active = heap_insert(root, n0);
-            }
-            else {
-                if (temp < dist[n0->node2ind]) {
-                    link_to_parent(n0, n, temp, parent, dist);
-                    n0->active = dcrease_key(root, n0, temp);
-                }
+                if (h == NULL) 
+                    heap = heap_insert(heap, n0, temp);
+                else 
+                    heap = decrease_key(heap, h, temp);
             }
             p = p->next;
         }
     }
+    assert(heap_node_count == 0);
 }
 
 void shortest_paths(network *net) {
@@ -490,22 +618,40 @@ void shortest_paths(network *net) {
     node **parent = (node **) new_buffer();
     double *dist = (double *) malloc(sizeof(double) * net->node_count);
     for (i = 0; i < net->node_count; i ++) {
+        int j;
+        for (j = 0; j < net->node_count; j ++) {
+            parent[j] = NULL;
+            dist[j] = -1;
+        }
         node *n = net->ind2node[i];
         if (n->color == net->greatest_component) {
             shortest_paths_from(net, n, parent, dist);
+            /*
+            for (j = 0; j < net->node_count; j ++) {
+                node *p = net->ind2node[j];
+                while (p != NULL) {
+                    printf("%d ", p->node2ind);
+                    p = parent[p->node2ind];
+                }
+                printf("\n");
+            }
+            */
         }
     }
 }
 
 void init() {
+    srand(time(0));
     init_pointer_buffers();
     init_bst();
+    init_heap();
     init_network();
     printf("inited\n");
 }
 
 void clear() {
     clear_network();
+    clear_heap();
     clear_bst();
     clear_pointer_buffers();
     printf("clear\n");
