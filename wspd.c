@@ -45,6 +45,7 @@ typedef struct wspd {
     quad_node *root;
     pair *list;
     int size, tail, count, depth;
+    double s;
 } wspd;
 
 double frand() {
@@ -464,31 +465,43 @@ int level(quad_node *u) {
         return INF;
 }
 
-void build(wspd *w, quad_node *u, quad_node *v, double s) {
+void build(wspd *w, quad_node *u, quad_node *v) {
     if (u == v && u->type != GRAY && v->type != GRAY) 
         return ;
     if (u->type == WHITE || v->type == WHITE) 
         return ;
-    if (well_separated(u, v, s)) {
+    if (well_separated(u, v, w->s)) {
         add_pair(w, u, v);
     }
     else {
         int i;
         if (level(u) > level(v)) {
             for (i = 0; i < 4; i ++) {
-                build(w, u, v->child[i], s);
+                build(w, u, v->child[i]);
             }
         }
         else {
             for (i = 0; i < 4; i ++) {
-                build(w, u->child[i], v, s);
+                build(w, u->child[i], v);
             }
         }
     }
 }
 
-void check_wspd(point *input, int N, wspd *w) {
+double check_query(wspd *w, point *a, point *b) {
+    pair *p = bin_search(w, a, b);
+    assert(p != NULL && contain(p->u, a) && contain(p->v, b));
+    double e = 1 - sqrt(dist2(a, b)) / sqrt(dist2(p->u->data, p->v->data));
+    return ABS(e);
+}
+
+double check_wspd(wspd *w, point *input, int N) {
     int i, j;
+    double ret = 0;
+    for (i = 0; i < w->tail; i ++) {
+        pair *p = w->list + i;
+        assert(well_separated(p->u, p->v, w->s));
+    }
     for (i = 0; i < w->tail - 1; i ++) {
         char temp[CLEN], temp2[CLEN];
         pr_z4_code(temp, w->list + i);
@@ -499,16 +512,16 @@ void check_wspd(point *input, int N, wspd *w) {
         for (j = 0; j < N; j ++) {
             if (i == j) continue;
             int a = i, b = j;
-            pair *p = bin_search(w, input + a, input + b);
-            assert(p != NULL);
-            assert(contain(p->u, input + a));
-            assert(contain(p->v, input + b));
+            double e = check_query(w, input + a, input + b);
+            ret = MAX(ret, e);
         }
     }
+    return ret;
 }
 
-wspd *new_wspd(point *input, int N, double s) {
+wspd *new_wspd(double s, point *input, int N) {
     wspd *w = (wspd *) malloc(sizeof(wspd));
+    w->s = s;
     w->tail = 0; w->size = 256;
     w->list = (pair *) malloc(sizeof(pair) * w->size);
     w->dict = new_trie_node(w);
@@ -518,9 +531,9 @@ wspd *new_wspd(point *input, int N, double s) {
     for (i = 0; i < N; i ++) {
         quad_insert(w, w->root, input + i);
     }
-    build(w, w->root, w->root, s);
+    build(w, w->root, w->root);
     printf("%lf\n", (double) w->tail / N / (N - 1));
-    //check_wspd(input, N, w);
+    printf("%lf\n", check_wspd(w, input, N));
     return w;
 }
 
@@ -532,7 +545,7 @@ void free_wspd(wspd *w) {
 }
 
 double diam(point *input, int N, double eps) {
-    wspd *w = new_wspd(input, N, 2 / eps);
+    wspd *w = new_wspd(4 / eps, input, N);
     int i;
     double ret = -1;
     for (i = 0; i < w->tail; i ++) {
@@ -558,7 +571,7 @@ double _diam(point *input, int N) {
 void test() {
     int N = (int) 1e4;
     point *input = init(N);
-    double eps = 0.1;
+    double eps = 0.2;
     printf("%lf\n", diam(input, N, eps) / _diam(input, N));
     free(input);
 }
