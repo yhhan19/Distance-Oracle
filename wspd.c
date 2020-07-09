@@ -5,10 +5,10 @@
 #include <assert.h>
 #include <string.h>
 
-#define NW 2
-#define NE 3
 #define SW 0
 #define SE 1
+#define NW 2
+#define NE 3
 #define WHITE 0
 #define BLACK 1
 #define GRAY 2
@@ -18,7 +18,7 @@
 #define MIN(a,b) (((a)<(b))?(a):(b))
 #define ABS(a) (((a)>0)?(a):(-(a)))
 #define RAD ((double) (RAND_MAX + 1))
-//#define MOD 0xffffff
+#define CLEN 64
 
 typedef struct point {
     double x, y;
@@ -26,7 +26,7 @@ typedef struct point {
 
 typedef struct quad_node {
     struct quad_node *child[4];
-    int type, depth, size, id;
+    int type, depth, size;
     long long code;
     point p, q, *data;
 } quad_node;
@@ -34,11 +34,6 @@ typedef struct quad_node {
 typedef struct pair {
     struct quad_node *u, *v;
 } pair;
-
-typedef struct hash_node {
-    int u, v;
-    struct hash_node *next;
-} hash_node;
 
 typedef struct trie_node {
     struct trie_node *child[6];
@@ -72,7 +67,6 @@ point *init(int N) {
 
 quad_node *new_quad_node(wspd *w, quad_node *f, int i) {
     quad_node *n = (quad_node *) malloc(sizeof(quad_node));
-    n->id = w->count ++;
     if (f == NULL) {
         n->p.x = 0; n->p.y = 0;
         n->q.x = RAD; n->q.y = RAD;
@@ -114,7 +108,13 @@ quad_node *new_quad_node(wspd *w, quad_node *f, int i) {
     return n;
 }
 
-int sub(quad_node *n, point *data) {
+int contain(quad_node *r, point *p) {
+    if (p->x < r->p.x || p->x >= r->q.x) return 0;
+    if (p->y < r->p.y || p->y >= r->q.y) return 0;
+    return 1;
+}
+
+int id(quad_node *n, point *data) {
     point r;
     r.x = (n->p.x + n->q.x) / 2;
     r.y = (n->p.y + n->q.y) / 2; 
@@ -124,7 +124,7 @@ int sub(quad_node *n, point *data) {
         return (data->y < r.y) ? SE : NE;
 }
 
-void insert(wspd *w, quad_node *n, point *data) {
+void quad_insert(wspd *w, quad_node *n, point *data) {
     switch (n->type) {
         case WHITE: 
             n->data = data;
@@ -136,21 +136,21 @@ void insert(wspd *w, quad_node *n, point *data) {
             n->child[NE] = new_quad_node(w, n, NE);
             n->child[SW] = new_quad_node(w, n, SW);
             n->child[SE] = new_quad_node(w, n, SE);
-            n->child[sub(n, n->data)]->data = n->data;
-            n->child[sub(n, n->data)]->type = BLACK;
-            n->child[sub(n, n->data)]->size = 1;
+            n->child[id(n, n->data)]->data = n->data;
+            n->child[id(n, n->data)]->type = BLACK;
+            n->child[id(n, n->data)]->size = 1;
             n->type = GRAY;
             n->size ++;
-            insert(w, n->child[sub(n, data)], data);
+            quad_insert(w, n->child[id(n, data)], data);
             break;
         case GRAY: 
             n->size ++;
-            insert(w, n->child[sub(n, data)], data);
+            quad_insert(w, n->child[id(n, data)], data);
             break;
     }
 }
 
-quad_node *search(quad_node *n, point *data) {
+quad_node *quad_search(quad_node *n, point *data) {
     quad_node *ret;
     switch (n->type) {
         case WHITE: 
@@ -160,7 +160,7 @@ quad_node *search(quad_node *n, point *data) {
             ret = n;
             break;
         case GRAY: 
-            return search(n->child[sub(n, data)], data);
+            return quad_search(n->child[id(n, data)], data);
             break;
     }
     return ret;
@@ -175,13 +175,15 @@ void free_quad(quad_node *root) {
     free(root);
 }
 
-trie_node *new_trie_node() {
+trie_node *new_trie_node(wspd *w) {
     trie_node *p = (trie_node *) malloc(sizeof(trie_node));
     int i;
     for (i = 0; i < 6; i ++) {
         p->child[i] = NULL;
     }
     p->data = -1;
+    w->count ++;
+    return p;
 }
 
 void trie_insert(wspd *w, int _p) {
@@ -200,38 +202,374 @@ void trie_insert(wspd *w, int _p) {
     }
     trie_node *root = w->dict;
     while (du > 0 || dv > 0) {
-        assert(root != NULL);
         du --;
         dv --;
         if (du < 0){
             if (root->child[5] == NULL) {
-                root->child[5] = new_trie_node();
+                root->child[5] = new_trie_node(w);
             }
             root = root->child[5];
         }
         else {
             if (root->child[u[du]] == NULL) {
-                root->child[u[du]] = new_trie_node();
+                root->child[u[du]] = new_trie_node(w);
             }
             root = root->child[u[du]];
         }
         if (dv < 0) {
             if (root->child[5] == NULL) {
-                root->child[5] = new_trie_node();
+                root->child[5] = new_trie_node(w);
             }
             root = root->child[5];
         }
         else {
             if (root->child[v[dv]] == NULL) {
-                root->child[v[dv]] = new_trie_node();
+                root->child[v[dv]] = new_trie_node(w);
             }
             root = root->child[v[dv]];
         }
     }
     assert(root->child[4] == NULL);
-    root->child[4] = new_trie_node();
+    root->child[4] = new_trie_node(w);
     root->child[4]->data = _p;
 }
+
+pair *trie_search(wspd *w, point *p, point *q) {
+    double lxp = 0, lyp = 0, rxp = RAD, ryp = RAD;
+    double lxq = 0, lyq = 0, rxq = RAD, ryq = RAD;
+    trie_node *root = w->dict;
+    int i;
+    for (i = 0; i < w->depth; i ++) {
+        int cp = 0, cq = 0;
+        double myp = (lyp + ryp) / 2;
+        if (p->y < myp) {
+            ryp = myp;
+            cp = cp * 2;
+        }
+        else {
+            lyp = myp;
+            cp = cp * 2 + 1;
+        }
+        double mxp = (lxp + rxp) / 2;
+        if (p->x < mxp) {
+            rxp = mxp;
+            cp = cp * 2;
+        }
+        else {
+            lxp = mxp;
+            cp = cp * 2 + 1;
+        }
+        double myq = (lyq + ryq) / 2;
+        if (q->y < myq) {
+            ryq = myq;
+            cq = cq * 2;
+        }
+        else {
+            lyq = myq;
+            cq = cq * 2 + 1;
+        }
+        double mxq = (lxq + rxq) / 2;
+        if (q->x < mxq) {
+            rxq = mxq;
+            cq = cq * 2;
+        }
+        else {
+            lxq = mxq;
+            cq = cq * 2 + 1;
+        }
+        if (root->child[cp] != NULL) {
+            root = root->child[cp];
+        }
+        else if (root->child[5] != NULL) {
+            root = root->child[5];
+        }
+        else {
+            return w->list + root->child[4]->data;
+        }
+        if (root->child[cq] != NULL) {
+            root = root->child[cq];
+        }
+        else if (root->child[5] != NULL) {
+            root = root->child[5];
+        }
+        else {
+            return w->list + root->child[4]->data;
+        }
+    }
+    return w->list + root->child[4]->data;
+}
+
+void free_trie(trie_node *root) {
+    if (root == NULL) return ;
+    int i;
+    for (i = 0; i < 6; i ++) {
+        free_trie(root->child[i]);
+    }
+    free(root);
+}
+
+int pr_z4_code(char *ret, pair *p) {
+    long long cu = p->u->code, cv = p->v->code;
+    int du = p->u->depth, dv = p->v->depth;
+    int u[CLEN], v[CLEN], i;
+    for (i = 0; i < du; i ++) {
+        u[i] = cu % 4;
+        cu = cu / 4;
+    }
+    for (i = 0; i < dv; i ++) {
+        v[i] = cv % 4;
+        cv = cv / 4;
+    }
+    int len = 0;
+    while (du > 0 || dv > 0) {
+        du --; dv --;
+        ret[len ++] = (du < 0) ? '4' : u[du] + '0';
+        ret[len ++] = (dv < 0) ? '4' : v[dv] + '0';
+    }
+    ret[len ++] = '\0';
+    return len;
+}
+
+void pt_z4_code(char *ret, point *p, point *q, int len) {
+    double lxp = 0, lyp = 0, rxp = RAD, ryp = RAD;
+    double lxq = 0, lyq = 0, rxq = RAD, ryq = RAD;
+    int i;
+    for (i = 0; i < len; i ++) {
+        int cp = 0, cq = 0;
+        double myp = (lyp + ryp) / 2;
+        if (p->y < myp) {
+            ryp = myp;
+            cp = cp * 2;
+        }
+        else {
+            lyp = myp;
+            cp = cp * 2 + 1;
+        }
+        double mxp = (lxp + rxp) / 2;
+        if (p->x < mxp) {
+            rxp = mxp;
+            cp = cp * 2;
+        }
+        else {
+            lxp = mxp;
+            cp = cp * 2 + 1;
+        }
+        double myq = (lyq + ryq) / 2;
+        if (q->y < myq) {
+            ryq = myq;
+            cq = cq * 2;
+        }
+        else {
+            lyq = myq;
+            cq = cq * 2 + 1;
+        }
+        double mxq = (lxq + rxq) / 2;
+        if (q->x < mxq) {
+            rxq = mxq;
+            cq = cq * 2;
+        }
+        else {
+            lxq = mxq;
+            cq = cq * 2 + 1;
+        }
+        ret[i * 2] = cp + '0';
+        ret[i * 2 + 1] = cq + '0';
+    }
+    ret[len * 2] = '\0';
+}
+
+int z4_code_cmp(char *a, char *b) {
+    char ca, cb;
+    do {
+        ca = *a ++;
+        cb = *b ++;
+        if (ca == '\0') return ca - cb;
+    } while (ca == cb || ca == '4' || cb == '4');
+    return ca - cb;
+}
+
+int cmp(wspd *w, point *p, point *q, pair *pr) {
+    char ca[CLEN], cb[CLEN];
+    pt_z4_code(ca, p, q, w->depth);
+    pr_z4_code(cb, pr);
+    return z4_code_cmp(ca, cb);
+}
+
+pair *bin_search(wspd *w, point *p, point *q) {
+    int l = 0, r = w->tail - 1;
+    while (l < r) {
+        int m = (l + r) / 2;
+        int delta = cmp(w, p, q, w->list + m);
+        if (delta < 0) r = m - 1;
+        if (delta > 0) l = m + 1;
+        if (delta == 0) return w->list + m;
+    }
+    int i;
+    for (i = l - 1; i <= l; i ++) {
+        if (i < 0 || i >= w->tail) continue;
+        pair *A = w->list + i;
+        if (contain(A->u, p) && contain(A->v, q)) return A;
+    }
+    return NULL;
+}
+
+void add_pair(wspd *w, quad_node *u, quad_node *v) {
+    if (w->tail == w->size) {
+        w->size *= 2;
+        pair *temp = (pair *) malloc(sizeof(pair) * w->size);
+        int i;
+        for (i = 0; i < w->tail; i ++) 
+            temp[i] = w->list[i];
+        free(w->list);
+        w->list = temp;
+    }
+    w->list[w->tail].u = u;
+    w->list[w->tail].v = v;
+    w->tail ++;
+    //trie_insert(w, w->tail - 1);
+}
+
+int well_separated(quad_node *u, quad_node *v, double s) {
+    point cu, cv;
+    double du, dv;
+    if (u->type == BLACK) {
+        cu.x = u->data->x;
+        cu.y = u->data->y;
+        du = 0;
+    }
+    else {
+        cu.x = (u->p.x + u->q.x) / 2;
+        cu.y = (u->p.y + u->q.y) / 2;
+        du = (u->q.x - u->p.x) * SQRT2;
+    }
+    if (v->type == BLACK) {
+        cv.x = v->data->x;
+        cv.y = v->data->y;
+        dv = 0;
+    }
+    else {
+        cv.x = (v->p.x + v->q.x) / 2;
+        cv.y = (v->p.y + v->q.y) / 2;
+        dv = (v->q.x - v->p.x) * SQRT2;
+    }
+    double r = MAX(du, dv) / 2;
+    double d = sqrt(dist2(& cu, & cv)) - MAX(du, dv);
+    return (d >= s * r);
+}
+
+int level(quad_node *u) {
+    if (u->type == GRAY) 
+        return u->depth;
+    else 
+        return INF;
+}
+
+void build(wspd *w, quad_node *u, quad_node *v, double s) {
+    if (u == v && u->type != GRAY && v->type != GRAY) 
+        return ;
+    if (u->type == WHITE || v->type == WHITE) 
+        return ;
+    if (well_separated(u, v, s)) {
+        add_pair(w, u, v);
+    }
+    else {
+        int i;
+        if (level(u) > level(v)) {
+            for (i = 0; i < 4; i ++) {
+                build(w, u, v->child[i], s);
+            }
+        }
+        else {
+            for (i = 0; i < 4; i ++) {
+                build(w, u->child[i], v, s);
+            }
+        }
+    }
+}
+
+void check_wspd(point *input, int N, wspd *w) {
+    int i, j;
+    for (i = 0; i < w->tail - 1; i ++) {
+        char temp[CLEN], temp2[CLEN];
+        pr_z4_code(temp, w->list + i);
+        pr_z4_code(temp2, w->list + i + 1);
+        assert(strcmp(temp, temp2) == -1);
+    }
+    for (i = 0; i < N; i ++) {
+        for (j = 0; j < N; j ++) {
+            if (i == j) continue;
+            int a = i, b = j;
+            pair *p = bin_search(w, input + a, input + b);
+            assert(p != NULL);
+            assert(contain(p->u, input + a));
+            assert(contain(p->v, input + b));
+        }
+    }
+}
+
+wspd *new_wspd(point *input, int N, double s) {
+    wspd *w = (wspd *) malloc(sizeof(wspd));
+    w->tail = 0; w->size = 256;
+    w->list = (pair *) malloc(sizeof(pair) * w->size);
+    w->dict = new_trie_node(w);
+    w->count = 0; w->depth = 0;
+    w->root = new_quad_node(w, NULL, -1);
+    int i, j;
+    for (i = 0; i < N; i ++) {
+        quad_insert(w, w->root, input + i);
+    }
+    build(w, w->root, w->root, s);
+    printf("%lf\n", (double) w->tail / N / (N - 1));
+    //check_wspd(input, N, w);
+    return w;
+}
+
+void free_wspd(wspd *w) {
+    free_quad(w->root);
+    free_trie(w->dict);
+    free(w->list);
+    free(w);
+}
+
+double diam(point *input, int N, double eps) {
+    wspd *w = new_wspd(input, N, 2 / eps);
+    int i;
+    double ret = -1;
+    for (i = 0; i < w->tail; i ++) {
+        double d2 = dist2(w->list[i].u->data, w->list[i].v->data);
+        if (ret < 0 || d2 > ret) ret = d2;
+    }
+    free_wspd(w);
+    return sqrt(ret);
+}
+
+double _diam(point *input, int N) {
+    int i, j;
+    double ret = -1;
+    for (i = 0; i < N; i ++) {
+        for (j = i + 1; j < N; j ++) {
+            double d2 = dist2(input + i, input + j);
+            if (ret < 0 || d2 > ret) ret = d2;
+        }
+    }
+    return sqrt(ret);
+}
+
+void test() {
+    int N = (int) 1e4;
+    point *input = init(N);
+    double eps = 0.1;
+    printf("%lf\n", diam(input, N, eps) / _diam(input, N));
+    free(input);
+}
+
+int main() {
+    srand(time(0));
+    test();
+    return 0;
+}
+
+/*
 
 long long z_code(point *p, int len) {
     double lx = 0, ly = 0, rx = RAD, ry = RAD;
@@ -295,256 +633,4 @@ pair *search_pair(wspd *w, point *p, point *q) {
     return ret;
 }
 
-pair *trie_search(wspd *w, point *p, point *q) {
-    double lxp = 0, lyp = 0, rxp = RAD, ryp = RAD;
-    double lxq = 0, lyq = 0, rxq = RAD, ryq = RAD;
-    int i;
-    trie_node *root = w->dict;
-    int codep = 0, codeq = 0;
-    for (i = 0; i < w->depth; i ++) {
-        int cp = 0, cq = 0;
-        double myp = (lyp + ryp) / 2;
-        if (p->y < myp) {
-            ryp = myp;
-            cp = cp * 2;
-        }
-        else {
-            lyp = myp;
-            cp = cp * 2 + 1;
-        }
-        double mxp = (lxp + rxp) / 2;
-        if (p->x < mxp) {
-            rxp = mxp;
-            cp = cp * 2;
-        }
-        else {
-            lxp = mxp;
-            cp = cp * 2 + 1;
-        }
-        codep = codep * 4 + cp;
-        double myq = (lyq + ryq) / 2;
-        if (q->y < myq) {
-            ryq = myq;
-            cq = cq * 2;
-        }
-        else {
-            lyq = myq;
-            cq = cq * 2 + 1;
-        }
-        double mxq = (lxq + rxq) / 2;
-        if (q->x < mxq) {
-            rxq = mxq;
-            cq = cq * 2;
-        }
-        else {
-            lxq = mxq;
-            cq = cq * 2 + 1;
-        }
-        codeq = codeq * 4 + cq;
-        //printf("%d 1\n", cp);
-        assert(root != NULL);
-        if (root->child[cp] != NULL) {
-            //printf("%d 11\n", cp);
-            root = root->child[cp];
-        }
-        else if (root->child[5] != NULL) {
-            //printf("%d 12\n", cp);
-            root = root->child[5];
-        }
-        else {
-            //printf("%d 13\n", cp);
-            assert(root->child[4] != NULL);
-            //printf("%d 14\n", cp);
-            return w->list + root->child[4]->data;
-        }
-        //printf("%d 2\n", cq);
-        if (root->child[cq] != NULL) {
-            //printf("%d 21\n", cp);
-            root = root->child[cq];
-        }
-        else if (root->child[5] != NULL) {
-            //printf("%d 22\n", cp);
-            root = root->child[5];
-        }
-        else {
-            //printf("%d 23\n", cp);
-            assert(root->child[4] != NULL);
-            //printf("%d 24\n", cp);
-            return w->list + root->child[4]->data;
-        }
-    }
-    return w->list + root->child[4]->data;
-}
-
-void add_pair(wspd *w, quad_node *u, quad_node *v) {
-    if (w->tail == w->size) {
-        w->size *= 2;
-        pair *temp = (pair *) malloc(sizeof(pair) * w->size);
-        int i;
-        for (i = 0; i < w->tail; i ++) 
-            temp[i] = w->list[i];
-        free(w->list);
-        w->list = temp;
-    }
-    w->list[w->tail].u = u;
-    w->list[w->tail].v = v;
-    trie_insert(w, w->tail);
-    w->tail ++;
-}
-
-int well_separated(quad_node *u, quad_node *v, double s) {
-    point cu, cv;
-    double du, dv;
-    if (u->type == BLACK) {
-        cu.x = u->data->x;
-        cu.y = u->data->y;
-        du = 0;
-    }
-    else {
-        cu.x = (u->p.x + u->q.x) / 2;
-        cu.y = (u->p.y + u->q.y) / 2;
-        du = (u->q.x - u->p.x) * SQRT2;
-    }
-    if (v->type == BLACK) {
-        cv.x = v->data->x;
-        cv.y = v->data->y;
-        dv = 0;
-    }
-    else {
-        cv.x = (v->p.x + v->q.x) / 2;
-        cv.y = (v->p.y + v->q.y) / 2;
-        dv = (v->q.x - v->p.x) * SQRT2;
-    }
-    double r = MAX(du, dv) / 2;
-    double d = sqrt(dist2(& cu, & cv)) - MAX(du, dv);
-    return (d >= s * r);
-}
-
-int level(quad_node *u) {
-    if (u->type == GRAY) 
-        return u->depth;
-    else 
-        return INF;
-}
-
-void build(wspd *w, quad_node *u, quad_node *v, double s) {
-    if (u == v && u->type != GRAY && v->type != GRAY) 
-        return ;
-    if (u->type == WHITE || v->type == WHITE) 
-        return ;
-    if (well_separated(u, v, s)) {
-        add_pair(w, u, v);
-    }
-    else {
-        int i;
-        if (level(u) > level(v)) {
-            for (i = 0; i < 4; i ++) {
-                build(w, u, v->child[i], s);
-            }
-        }
-        else {
-            for (i = 0; i < 4; i ++) {
-                build(w, u->child[i], v, s);
-            }
-        }
-    }
-}
-
-int contain(quad_node *r, point *p) {
-    if (p->x < r->p.x || p->x >= r->q.x) return 0;
-    if (p->y < r->p.y || p->y >= r->q.y) return 0;
-    return 1;
-}
-
-wspd *new_wspd(point *input, int N, double s) {
-    wspd *w = (wspd *) malloc(sizeof(wspd));
-    w->tail = 0; w->size = 256;
-    w->list = (pair *) malloc(sizeof(pair) * w->size);
-    /*
-    w->hash = (hash_node **) malloc(sizeof(hash_node *) * (MOD + 1));
-    memset(w->hash, 0, sizeof(w->hash));
-    */
-    w->dict = new_trie_node();
-    w->count = 0; w->depth = 0;
-    w->root = new_quad_node(w, NULL, -1);
-    int i, j;
-    for (i = 0; i < N; i ++) {
-        insert(w, w->root, input + i);
-    }
-    build(w, w->root, w->root, s);
-    for (i = 0; i < N; i ++) {
-        for (j = 0; j < N; j ++) {
-            if (i == j) continue;
-            int a = i, b = j;
-            //printf("%d %d\n", a, b);
-            /*
-            pair *p = search_pair(w, input + a, input + b);
-            assert(contain(p->u, input + a));
-            assert(contain(p->v, input + b));
-            */
-            pair *_p = trie_search(w, input + a, input + b);
-            if (_p == NULL) {
-                pair *p = search_pair(w, input + a, input + b);
-                assert(contain(p->u, input + a));
-                assert(contain(p->v, input + b));
-            }
-            assert(_p != NULL);
-            assert(contain(_p->u, input + a));
-            assert(contain(_p->v, input + b));
-        }
-    }
-    return w;
-}
-
-/*
-void free_hash(hash_node **hash) {
-    int i;
-    for (i = 0; i <= MOD; i ++) {
-        hash_node *p = hash[i];
-        while (p != NULL) {
-            hash_node *q = p;
-            p = p->next;
-            free(q);
-        }
-    }
-}
 */
-
-void free_wspd(wspd *w) {
-    free_quad(w->root);
-    //free_hash(w->hash);
-    free(w->list);
-}
-
-double diam(point *input, int N, double eps) {
-    wspd *w = new_wspd(input, N, 4 / eps);
-    int i;
-    double ret = -1;
-    for (i = 0; i < w->tail; i ++) {
-        double d2 = dist2(w->list[i].u->data, w->list[i].v->data);
-        if (ret < 0 || d2 > ret) ret = d2;
-    }
-    free_wspd(w);
-    return sqrt(ret);
-}
-
-double _diam(point *input, int N) {
-    int i, j;
-    double ret = -1;
-    for (i = 0; i < N; i ++) {
-        for (j = i + 1; j < N; j ++) {
-            double d2 = dist2(input + i, input + j);
-            if (ret < 0 || d2 > ret) ret = d2;
-        }
-    }
-    return sqrt(ret);
-}
-
-int main() {
-    srand(time(0));
-    int N = (int) 2e4;
-    point *input = init(N);
-    double eps = 0.2;
-    printf("%lf\n", diam(input, N, eps) / _diam(input, N));
-    return 0;
-}
