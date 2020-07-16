@@ -2,6 +2,7 @@
 
 quad_node *new_quad_node(wspd *w, quad_node *f, int i) {
     quad_node *n = (quad_node *) malloc(sizeof(quad_node));
+    quad_count ++;
     if (f == NULL) {
         n->depth = 0;
         n->code = 0;
@@ -111,6 +112,7 @@ void free_quad(quad_node *root) {
         free_quad(root->child[i]);
     }
     free(root);
+    quad_count --;
 }
 
 int pair_contain(pair *p, node *a, node *b) {
@@ -231,7 +233,8 @@ void add_pair(wspd *w, quad_node *u, quad_node *v) {
             temp[i] = w->list[i];
         free(w->list);
         w->list = temp;
-        printf("wspd: %d [array expand]\n", w->size);
+        if (w->size >= (int) 1e6) 
+            printf("wspd: %d [array expanded]\n", w->size);
     }
     w->list[w->tail].u = u;
     w->list[w->tail].v = v;
@@ -301,14 +304,13 @@ void build(wspd *w, quad_node *u, quad_node *v) {
     }
 }
 
-double check_query(wspd *w, node *a, node *b) {
+pair *check_query(wspd *w, node *a, node *b) {
     pair *p = bin_search(w, a, b);
     assert(p != NULL);
-    double e = sqrt(sphere_dist(a, b)) / sqrt(sphere_dist(p->u->data, p->v->data));
-    return e;
+    return p;
 }
 
-double check_wspd(wspd *w, network *net) {
+void check_wspd(wspd *w, network *net, int step) {
     int i, j;
     double min = 1, max = 1;
     for (i = 0; i < w->tail; i ++) {
@@ -321,15 +323,25 @@ double check_wspd(wspd *w, network *net) {
         pr_z4_code(temp2, w->list + i + 1);
         assert(strcmp(temp, temp2) == -1);
     }
-    for (i = 0; i < net->node_count; i += 500) {
-        for (j = 0; j < net->node_count; j += 500) {
+    clock_t time = clock();
+    int times = 0;
+    for (i = 0; i < net->node_count; i += step) {
+        if (net->ind2node[i]->color != net->greatest_component) continue;
+        for (j = 0; j < net->node_count; j += step) {
+            if (net->ind2node[j]->color != net->greatest_component) continue;
             if (i == j) continue;
-            double e = check_query(w, net->ind2node[i], net->ind2node[j]);
+            pair *p = check_query(w, net->ind2node[i], net->ind2node[j]);
+            double e = sphere_dist(net->ind2node[i], net->ind2node[j]);
+            e /= sphere_dist(p->u->data, p->v->data);
             min = MIN(min, e);
             max = MAX(max, e);
+            times ++;
         }
     }
-    return MAX((1 / min) - 1, 1 - max);
+    time = clock() - time;
+    printf("wspd: %lf [wspd error]\n", MAX((1 / min) - 1, 1 - max));
+    printf("wspd: %lf (ms) [query time]\n", (double) time / times);
+    printf("wspd: checked\n");
 }
 
 wspd *new_wspd(double eps, network *net) {
@@ -343,21 +355,35 @@ wspd *new_wspd(double eps, network *net) {
     w->root->p.lat = w->root->p.lon = PI;
     w->root->q.lat = w->root->q.lon = - PI;
     for (i = 0; i < net->node_count; i ++) {
+        node *n = net->ind2node[i];
+        if (n->color != net->greatest_component) continue;
         w->root->p.lat = MIN(w->root->p.lat, net->ind2node[i]->lat);
         w->root->q.lat = MAX(w->root->q.lat, net->ind2node[i]->lat);
         w->root->p.lon = MIN(w->root->p.lon, net->ind2node[i]->lon);
         w->root->q.lon = MAX(w->root->q.lon, net->ind2node[i]->lon);
     }
-    quad_node *u = w->root;
-    for (i = 0; i < net->node_count; i += 500) {
-        if (! quad_contain(w->root, net->ind2node[i])) continue;
-        quad_insert(w, w->root, net->ind2node[i]);
+    clock_t time = clock();
+    for (i = 0; i < net->node_count; i ++) {
+        node *n = net->ind2node[i];
+        if (n->color == net->greatest_component) {
+            quad_insert(w, w->root, net->ind2node[i]);
+        }
     }
-    printf("wspd: %d nodes [quadtree]\n", w->root->size);
-    printf("wspd: %d layers [quadtree]\n", w->depth);
+    time = clock() - time;
+    printf("wspd: %d nodes %d layers [quadtree]\n", w->root->size, w->depth);
+    printf("wspd: %d (ms) [insertion time]\n", time);
+    time = clock();
     build(w, w->root, w->root);
-    printf("wspd: %d pairs\n", w->tail);
+    time = clock() - time;
+    printf("wspd: %d pairs (%lf)\n", w->tail, 
+        (double) w->tail / w->root->size / (w->root->size - 1));
+    printf("wspd: %d (ms) [build time]\n", time);
+    printf("wspd: built\n");
     return w;
+}
+
+void clear_wspd() {
+    assert(quad_count == 0);
 }
 
 void free_wspd(wspd *w) {

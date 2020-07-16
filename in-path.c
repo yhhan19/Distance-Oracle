@@ -6,25 +6,32 @@ void init() {
     init_bst();
     init_heap();
     init_network();
-    printf("main: inited\n");
+    printf("main: initialized\n");
 }
 
 void clear() {
+    clear_wspd();
     clear_network();
     clear_heap();
     clear_bst();
     clear_pointer_buffers();
-    printf("main: clear\n");
+    printf("main: all clear\n");
 }
 
 void test() {
-    
+    /*
     network *net = new_network_from("map-shanghai.osm");
     double d = network_distance(net,
         31.2983874, 121.4996445, 31.1942597, 121.5944074);
+    */
+    network *net = new_network_from("map-beijing-2.osm");
+    check_network_distance(net);
+    //float **dist = read_shortest_paths(net);
+    check_shortest_paths(net);
     wspd *w = new_wspd(1.9, net);
-    printf("main: %lf [wspd error]\n", check_wspd(w, net));
+    check_wspd(w, net, 100);
     free_wspd(w);
+    //free_matrix(dist, net->node_count);
     free_network(net);
     /*
     network *net = new_network_from("map-dc.osm");

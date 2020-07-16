@@ -4,8 +4,8 @@ node *new_node(long long id, double lat, double lon) {
     node *n = (node *) malloc(sizeof(node));
     node_count ++;
     n->node2id = id;
-    n->lat = lat * PI / 180;
-    n->lon = lon * PI / 180;
+    n->lat = lat;
+    n->lon = lon;
     n->in = n->out = 0;
     n->active = NULL;
     return n;
@@ -73,7 +73,7 @@ void new_nodes_from(network *net, FILE *fin) {
                 sscanf(s, "lon=\"%lf\"", & lon);
             fscanf(fin, "%s", s);
         }
-        node *n = new_node(id, lat, lon);
+        node *n = new_node(id, lat * PI / 180, lon * PI / 180);
         net->id2node = bst_insert(net->id2node, n);
     }
     bst_node **queue = (bst_node **) new_buffer();
@@ -185,7 +185,7 @@ int traverse_network_from(network *net, node *source, node **queue) {
 
 void mark_components(network *net) {
     node **queue = (node **) new_buffer();
-    int i, sum, max, argmax, count;
+    int i, sum, max, argmax, count, max2;
     for (i = 0, sum = 0, max = 0, count = 0; i < net->node_count; i ++) {
         if (net->ind2node[i]->active == NULL) {
             int tail = traverse_network_from(net, net->ind2node[i], queue);
@@ -195,16 +195,24 @@ void mark_components(network *net) {
             count ++;
             sum += tail;
             if (tail > max) {
+                max2 = max;
                 max = tail;
                 argmax = i;
+            }
+            else if (tail > max2) {
+                max2 = tail;
             }
         }
     }
     assert(sum == net->node_count);
+    net->component_count = count;
+    net->greatest_component_size = max;
     net->greatest_component = net->ind2node[argmax]->color;
     for (i = 0; i < net->node_count; i ++)
         net->ind2node[i]->active = NULL;
+    printf("network: %d components\n", count);
     printf("network: %d nodes [main component]\n", max);
+    printf("network: %d nodes [2nd component]\n", max2);
     free_buffer((void **) queue);
 }
 
@@ -240,6 +248,113 @@ void simplify(network *net) {
             }
         }
     }
+    printf("network: %d edges simplified\n", count);
+}
+
+void depth_traverse_network_from(
+    network *net, node *source, node **queue, int *tail) 
+{
+    adjacent_node *p = net->adjacent_lists[source->node2ind];
+    while (p != NULL) {
+        if (p->e->to->active == NULL) {
+            p->e->to->active = (void *) 1;
+            depth_traverse_network_from(net, p->e->to, queue, tail);
+        }
+        p = p->next;
+    }
+    queue[(* tail) ++] = source;
+}
+
+network *reverse_network(network *net) {
+    network *rn = (network *) malloc(sizeof(network));
+    return rn;
+}
+
+void strong_connected_component(network *net) {
+    node **queue = (node *) malloc(sizeof(node *) * net->node_count);
+    int i, tail = 0;
+    for (i = 0; i < net->node_count; i ++) {
+        node *n = net->ind2node[i];
+        if (n->active == NULL) {
+            depth_traverse_network_from(net, n, queue, & tail);
+        }
+    }
+    for (i = 0; i < tail; i ++) {
+        queue[i]->active = NULL;
+    }
+    network *rnet = reverse_network(net);
+    free(queue);
+}
+
+network *one_component(network *net) {
+    network *sn = (network *) malloc(sizeof(network));
+    sn->node_count = net->greatest_component_size;
+    sn->ind2node = (node **) malloc(
+        sizeof(node *) * net->greatest_component_size);
+    sn->id2node = new_bst();
+    int i, j;
+    int *map = (int *) malloc(sizeof(int) * net->node_count);
+    for (i = 0, j = 0; i < net->node_count; i ++) {
+        node *n = net->ind2node[i];
+        if (n->color == net->greatest_component) {
+            node *cpy = new_node(n->node2id, n->lat, n->lon);
+            cpy->node2ind = j;
+            cpy->in = n->in;
+            cpy->out = n->out;
+            cpy->active = NULL;
+            map[i] = j;
+            sn->ind2node[j ++] = cpy;
+            sn->id2node = bst_insert(sn->id2node, cpy);
+        }
+    }
+    sn->edge_count = 0;
+    sn->adjacent_lists = (adjacent_node **) malloc(
+        sizeof(adjacent_node *) * sn->node_count);
+    for (i = 0; i < sn->node_count; i ++) 
+        sn->adjacent_lists[i] = NULL;
+    for (i = 0; i < net->node_count; i ++) {
+        adjacent_node *p = net->adjacent_lists[i];
+        while (p != NULL) {
+            edge *cpy = new_edge(p->e->way, 
+                sn->ind2node[map[p->e->from->node2ind]], 
+                sn->ind2node[map[p->e->to->node2ind]]);
+            sn->edge_count ++;
+            adjacent_node *adj = new_adjacent_node(cpy);
+            adj->next = sn->adjacent_lists[cpy->from->node2ind];
+            sn->adjacent_lists[cpy->from->node2ind] = adj;
+            p = p->next;
+        }
+    }
+    mark_components(sn);
+    return sn;
+}
+
+void check_network_distance(network *net) {
+    int i, min_lat = -1, min_lon = -1, max_lat = -1, max_lon = -1, count = 0;
+    for (i = 0; i < net->node_count; i ++) {
+        node *n = net->ind2node[i];
+        if (n->color != net->greatest_component) continue;
+        if (min_lat == -1) {
+            min_lat = max_lat = min_lon = max_lon = i;
+        }
+        else {
+            if (n->lat < net->ind2node[min_lat]->lat) min_lat = i;
+            if (n->lat > net->ind2node[max_lat]->lat) max_lat = i;
+            if (n->lon < net->ind2node[min_lon]->lon) min_lon = i;
+            if (n->lon > net->ind2node[max_lon]->lon) max_lon = i;
+        }
+        count ++;
+    }
+    network_distance_rad(net, net->ind2node[min_lat], net->ind2node[max_lat]);
+    network_distance_rad(net, net->ind2node[min_lon], net->ind2node[max_lon]);
+    double L = 0, R = INF;
+    while (R - L > 1e-6) {
+        double M = (L + R) / 2;
+        bst_node *root = bounded_shortest_paths_from(net, net->ind2node[min_lat], M);
+        if (count / 2 < root->s) R = M; else L = M;
+        free_bst(root);
+    }
+    printf("distance: %lf (m) [half graph]\n", L);
 }
 
 network *new_network_from(const char *name) {
@@ -249,9 +364,11 @@ network *new_network_from(const char *name) {
     new_edges_from(net, fin);
     fclose(fin);
     mark_components(net);
-    simplify(net);
+    //simplify(net);
+    network *snet = one_component(net);
+    free_network(net);
     printf("network: loaded\n");
-    return net;
+    return snet;
 }
 
 void free_network(network *net) {
