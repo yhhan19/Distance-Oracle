@@ -190,6 +190,24 @@ float **read_shortest_paths(network *net) {
     printf("\n");
     time = clock() - time;
     printf("sp: %d (ms) [read]\n", time);
+    /*
+    for (i = 0; i < net->node_count; i ++) {
+        int A = rand() % net->node_count,
+            B = rand() % net->node_count,
+            C = rand() % net->node_count;
+        double delta = ret[A][B] + ret[B][C] - ret[A][C];
+        if (delta < -1e-3) printf("%lf\n", delta);
+    }
+    int k = 0;
+    for (i = 0; i < net->node_count; i ++) {
+        for (j = 0; j < net->node_count; j ++) {
+            if (ret[i][j] != ret[j][i]) 
+                k ++;
+        }
+    }
+    printf("sp: %lf [inequal]\n", 
+        (double) k / net->node_count / net->node_count);
+    */
     free_sp_vector(sp);
     fclose(spin);
     return ret;

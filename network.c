@@ -37,6 +37,8 @@ void init_network() {
 }
 
 void clear_network() {
+    if (node_count != 0 || edge_count != 0) 
+        printf("%d %d %d\n", node_count, edge_count, adjacent_node_count);
     assert(node_count == 0 && edge_count == 0);
     assert(adjacent_node_count == 0);
 }
@@ -267,23 +269,86 @@ void depth_traverse_network_from(
 
 network *reverse_network(network *net) {
     network *rn = (network *) malloc(sizeof(network));
+    rn->node_count = net->node_count;
+    rn->ind2node = (node **) malloc(
+        sizeof(node *) * net->node_count);
+    rn->id2node = new_bst();
+    int i;
+    for (i = 0; i < net->node_count; i ++) {
+        node *n = net->ind2node[i];
+        rn->ind2node[i] = new_node(n->node2id, n->lat, n->lon);
+        rn->ind2node[i]->node2ind = i;
+        rn->ind2node[i]->in = n->in;
+        rn->ind2node[i]->out = n->out;
+        rn->ind2node[i]->active = NULL;
+        rn->id2node = bst_insert(rn->id2node, rn->ind2node[i]);
+    }
+    rn->edge_count = net->edge_count;
+    rn->adjacent_lists = (adjacent_node **) malloc(
+        sizeof(adjacent_node *) * rn->node_count);
+    for (i = 0; i < rn->node_count; i ++) 
+        rn->adjacent_lists[i] = NULL;
+    for (i = 0; i < net->node_count; i ++) {
+        adjacent_node *p = net->adjacent_lists[i];
+        while (p != NULL) {
+            edge *e = new_edge(p->e->way, 
+                rn->ind2node[p->e->to->node2ind], 
+                rn->ind2node[p->e->from->node2ind]);
+            adjacent_node *adj = new_adjacent_node(e);
+            adj->next = rn->adjacent_lists[e->from->node2ind];
+            rn->adjacent_lists[e->from->node2ind] = adj;
+            p = p->next;
+        }
+    }
     return rn;
 }
 
 void strong_connected_component(network *net) {
-    node **queue = (node *) malloc(sizeof(node *) * net->node_count);
-    int i, tail = 0;
+    net->component_count = 0;
+    net->greatest_component = net->greatest_component_size = 0;
+    network *rnet = reverse_network(net);
+    node **queue = (node **) new_buffer();
+    node **stack = (node **) new_buffer();
+    int i, tail = 0, top = 0;
     for (i = 0; i < net->node_count; i ++) {
         node *n = net->ind2node[i];
         if (n->active == NULL) {
+            n->active = (void *) 1;
             depth_traverse_network_from(net, n, queue, & tail);
         }
     }
     for (i = 0; i < tail; i ++) {
         queue[i]->active = NULL;
+        stack[top ++] = rnet->ind2node[queue[i]->node2ind];
     }
-    network *rnet = reverse_network(net);
-    free(queue);
+    int sum = 0, temp = 0, argmax = -1;
+    while (top > 0) {
+        node *n = stack[-- top];
+        if (n->active == NULL) {
+            n->active = (void *) 1;
+            tail = 0;
+            depth_traverse_network_from(rnet, n, queue, & tail);
+            for (i = 0; i < tail; i ++) {
+                node *m = net->ind2node[queue[i]->node2ind];
+                m->color = net->component_count;
+            }
+            if (tail > net->greatest_component_size) {
+                temp = net->greatest_component_size;
+                net->greatest_component_size = tail;
+                net->greatest_component = net->component_count;
+            }
+            else if (tail > temp) {
+                temp = tail;
+            }
+            net->component_count ++;
+        }
+    }
+    printf("network: %d components\n", net->component_count);
+    printf("network: %d nodes [main component]\n", net->greatest_component_size);
+    printf("network: %d nodes [2nd component]\n", temp);
+    free_network(rnet);
+    free_buffer((void **) queue);
+    free_buffer((void **) stack);
 }
 
 network *one_component(network *net) {
@@ -315,17 +380,20 @@ network *one_component(network *net) {
     for (i = 0; i < net->node_count; i ++) {
         adjacent_node *p = net->adjacent_lists[i];
         while (p != NULL) {
-            edge *cpy = new_edge(p->e->way, 
-                sn->ind2node[map[p->e->from->node2ind]], 
-                sn->ind2node[map[p->e->to->node2ind]]);
-            sn->edge_count ++;
-            adjacent_node *adj = new_adjacent_node(cpy);
-            adj->next = sn->adjacent_lists[cpy->from->node2ind];
-            sn->adjacent_lists[cpy->from->node2ind] = adj;
+            if (p->e->from->color == p->e->to->color 
+             && p->e->from->color == net->greatest_component) {
+                edge *cpy = new_edge(p->e->way, 
+                    sn->ind2node[map[p->e->from->node2ind]], 
+                    sn->ind2node[map[p->e->to->node2ind]]);
+                sn->edge_count ++;
+                adjacent_node *adj = new_adjacent_node(cpy);
+                adj->next = sn->adjacent_lists[cpy->from->node2ind];
+                sn->adjacent_lists[cpy->from->node2ind] = adj;
+            }
             p = p->next;
         }
     }
-    mark_components(sn);
+    strong_connected_component(sn);
     return sn;
 }
 
@@ -363,7 +431,7 @@ network *new_network_from(const char *name) {
     new_nodes_from(net, fin);
     new_edges_from(net, fin);
     fclose(fin);
-    mark_components(net);
+    strong_connected_component(net);
     //simplify(net);
     network *snet = one_component(net);
     free_network(net);

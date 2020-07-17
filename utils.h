@@ -28,10 +28,6 @@
 #define MAX_string_buffer_len 65536
 #define MAX_pointer_buffers 8
 
-char string_buffer[MAX_string_buffer_len];
-void ***pointer_buffers;
-int *avail_pointer_buffer, max_buffers;
-
 typedef struct node {
     long long node2id;
     int node2ind, color, in, out;
@@ -51,10 +47,14 @@ typedef struct adjacent_node {
 } adjacent_node;
 
 typedef struct network {
-    int node_count, edge_count, greatest_component;
+    int node_count, edge_count, 
+        component_count,
+        greatest_component, 
+        greatest_component_size;
     node **ind2node;
     struct bst_node *id2node;
     struct adjacent_node **adjacent_lists;
+    float **dist;
 } network;
 
 typedef struct heap_node {
@@ -77,15 +77,18 @@ typedef struct sp_vector {
     heap_node *heap;
 } sp_vector;
 
-bst_node *BST_NULL;
-int bst_node_count, node_count, edge_count, 
-    heap_node_count, adjacent_node_count;
+typedef struct list_node {
+    void *data;
+    struct list_node *next;
+} list_node;
 
 typedef struct quad_node {
     struct quad_node *child[4];
     int type, depth, size;
     long long code;
     node p, q, *data;
+    list_node *desc;
+    double diam;
 } quad_node;
 
 typedef struct pair {
@@ -93,11 +96,20 @@ typedef struct pair {
 } pair;
 
 typedef struct wspd {
+    network *net;
     quad_node *root;
     pair *list;
     int size, tail, depth;
     double s;
 } wspd;
+
+bst_node *BST_NULL;
+char string_buffer[MAX_string_buffer_len];
+void ***pointer_buffers;
+int *avail_pointer_buffer, max_buffers;
+int bst_node_count, node_count, edge_count, 
+    heap_node_count, adjacent_node_count, 
+    list_count, quad_count;
 
 double sphere_dist(node *a, node *b);
 sp_vector *new_sp_vector(int node_count);
@@ -106,9 +118,13 @@ void free_sp_vector(sp_vector *sp);
 void update_sp_vector(sp_vector *sp, node *n0, node *n, double temp);
 node *extract_sp_vector(sp_vector *sp);
 void shortest_paths_from(network *net, sp_vector *sp, node *source);
+bst_node *bounded_shortest_paths_from(network *net, node *source, double bound);
 void shortest_paths(network *net);
+void check_shortest_paths(network *net);
+float **read_shortest_paths(network *net);
 node *nearest_neighbor(network *net, node *n);
-double network_distance(network *net, 
+double network_distance_rad(network *net, node *a, node *b);
+double network_distance_deg(network *net, 
     double lat0, double lon0, double lat1, double lon1);
 node *new_node(long long id, double lat, double lon);
 void free_node(node *n);
@@ -151,6 +167,8 @@ bst_node *rotate_left(bst_node *root);
 bst_node *re_balance(bst_node *root);
 bst_node *bst_insert(bst_node *root, node *n);
 bst_node *bst_search(bst_node *root, long long id);
+list_node *new_list_node(void *data);
+void free_list_node(list_node *p);
 quad_node *new_quad_node(wspd *w, quad_node *f, int i);
 int quad_contain(quad_node *r, node *p);
 int id(quad_node *n, node *data);
@@ -169,9 +187,10 @@ double node_dist(quad_node *u, quad_node *v);
 int well_separated(quad_node *u, quad_node *v, double s);
 int level(quad_node *u);
 void build(wspd *w, quad_node *u, quad_node *v);
-double check_query(wspd *w, node *a, node *b);
-double check_wspd(wspd *w, network *net);
-wspd *new_wspd(double eps, network *net);
+pair *check_query(wspd *w, node *a, node *b);
+void check_wspd(wspd *w, network *net, int step);
+wspd *new_wspd(network *net, double eps);
+void clear_wspd();
 void free_wspd(wspd *w);
 void init();
 void clear();

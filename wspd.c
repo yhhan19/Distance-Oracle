@@ -1,5 +1,18 @@
 #include "utils.h"
 
+list_node *new_list_node(void *data) {
+    list_count ++;
+    list_node *p = (list_node *) malloc(sizeof(list_node));
+    p->data = data;
+    p->next = NULL;
+    return p;
+}
+
+void free_list_node(list_node *p) {
+    list_count --;
+    free(p);
+}
+
 quad_node *new_quad_node(wspd *w, quad_node *f, int i) {
     quad_node *n = (quad_node *) malloc(sizeof(quad_node));
     quad_count ++;
@@ -36,10 +49,16 @@ quad_node *new_quad_node(wspd *w, quad_node *f, int i) {
         w->depth = n->depth;
     for (i = 0; i < 4; i ++) 
         n->child[i] = NULL;
+    n->desc = NULL;
     n->type = WHITE;
     n->data = NULL;
     n->size = 0;
     return n;
+}
+
+void free_quad_node(quad_node *p) {
+    quad_count --;
+    free(p);
 }
 
 int quad_contain(quad_node *r, node *p) {
@@ -59,12 +78,12 @@ int id(quad_node *n, node *data) {
 }
 
 int quad_insert(wspd *w, quad_node *n, node *data) {
-    int ret = 1;
+    int ret;
     switch (n->type) {
         case WHITE: 
+            ret = 1;
             n->data = data;
             n->type = BLACK;
-            n->size = 1;
             break;
         case BLACK: 
             if (n->depth == DEP) return 0;
@@ -75,16 +94,18 @@ int quad_insert(wspd *w, quad_node *n, node *data) {
             n->child[id(n, n->data)]->data = n->data;
             n->child[id(n, n->data)]->type = BLACK;
             n->child[id(n, n->data)]->size = 1;
-            ret = quad_insert(w, n->child[id(n, data)], data);
-            if (ret) {
-                n->size ++;
-                n->type = GRAY;
-            }
-            break;
         case GRAY: 
             ret = quad_insert(w, n->child[id(n, data)], data);
-            if (ret) n->size += ret;
-            break;
+            if (ret) n->type = GRAY;
+    }
+    if (ret) {
+        n->size ++;
+        list_node *p = new_list_node((void *) data);
+        p->next = n->desc;
+        n->desc = p;
+        double d0 = w->net->dist[n->data->node2ind][data->node2ind];
+        double d1 = w->net->dist[data->node2ind][n->data->node2ind];
+        n->diam = MAX(n->diam, MAX(d0, d1));
     }
     return ret;
 }
@@ -111,8 +132,13 @@ void free_quad(quad_node *root) {
     for (i = 0; i < 4; i ++) {
         free_quad(root->child[i]);
     }
-    free(root);
-    quad_count --;
+    list_node *p = root->desc, *q = NULL;
+    while (p != NULL) {
+        q = p;
+        p = p->next;
+        free_list_node(q);
+    }
+    free_quad_node(root);
 }
 
 int pair_contain(pair *p, node *a, node *b) {
@@ -201,11 +227,29 @@ int z4_code_cmp(char *a, char *b) {
     return ca - cb;
 }
 
+int z4_code_cmp_len(char *a, char *b) {
+    char ca, cb;
+    char *pa = a, *pb = b;
+    do {
+        ca = *a ++;
+        cb = *b ++;
+        if (ca == '\0') return a - pa;
+    } while (ca == cb || ca == '4' || cb == '4');
+    return a - pa;
+}
+
 int cmp(wspd *w, node *p, node *q, pair *pr) {
     char ca[CLEN], cb[CLEN];
     pt_z4_code(w, ca, p, q, w->depth);
     pr_z4_code(cb, pr);
     return z4_code_cmp(ca, cb);
+}
+
+int cmp_len(wspd *w, node *p, node *q, pair *pr) {
+    char ca[CLEN], cb[CLEN];
+    pt_z4_code(w, ca, p, q, w->depth);
+    pr_z4_code(cb, pr);
+    return z4_code_cmp_len(ca, cb);
 }
 
 pair *bin_search(wspd *w, node *p, node *q) {
@@ -217,11 +261,33 @@ pair *bin_search(wspd *w, node *p, node *q) {
         if (delta > 0) l = m + 1;
         if (delta == 0) return w->list + m;
     }
+    int i, ret = -1, max = -1;
+    for (i = l - 1; i <= l + 1; i ++) {
+        if (i < 0 || i >= w->tail) continue;
+        int len = cmp_len(w, p, q, w->list + i);
+        if (len > max) {
+            max = len;
+            ret = i;
+        }
+    }
+    /*
+    if (! pair_contain(w->list + ret, p, q)) {
+        char ca[CLEN], cb[CLEN];
+        printf("%d %d\n", p->node2ind, q->node2ind);
+        pt_z4_code(w, ca, p, q, w->depth);
+        pr_z4_code(cb, w->list + ret);
+        printf("%s\n%s\n", ca, cb);
+        scanf("%c");
+    }
+    */
+    return w->list + ret;
+    /*
     if (pair_contain(w->list + l, p, q))
         return w->list + l;
     if (l >= 1 && pair_contain(w->list + l - 1, p, q))
         return w->list + l - 1;
     return NULL;
+    */
 }
 
 void add_pair(wspd *w, quad_node *u, quad_node *v) {
@@ -269,9 +335,15 @@ double node_dist(quad_node *u, quad_node *v) {
 
 int well_separated(quad_node *u, quad_node *v, double s) {
     double du = diameter(u), dv = diameter(v);
-    double r = MAX(du, dv) / 2;
-    double d = node_dist(u, v);
-    return (d >= s * r);
+    double diam = MAX(du, dv);
+    double dist = node_dist(u, v);
+    return (dist >= s * diam);
+}
+
+int net_well_separated(wspd *w, quad_node *u, quad_node *v) {
+    double diam = MAX(u->diam, v->diam);
+    double dist = w->net->dist[u->data->node2ind][v->data->node2ind];
+    return (dist >= w->s * diam);
 }
 
 int level(quad_node *u) {
@@ -286,7 +358,7 @@ void build(wspd *w, quad_node *u, quad_node *v) {
         return ;
     if (u->type == WHITE || v->type == WHITE) 
         return ;
-    if (well_separated(u, v, w->s)) {
+    if (net_well_separated(w, u, v)) {
         add_pair(w, u, v);
     }
     else {
@@ -311,42 +383,56 @@ pair *check_query(wspd *w, node *a, node *b) {
 }
 
 void check_wspd(wspd *w, network *net, int step) {
-    int i, j;
+    int i, j, percent;
     double min = 1, max = 1;
-    for (i = 0; i < w->tail; i ++) {
+    long long total = 0;
+    for (i = 0, percent = 0; i < w->tail; i ++) {
         pair *p = w->list + i;
-        assert(well_separated(p->u, p->v, w->s));
+        assert(net_well_separated(w, p->u, p->v));
+        total += (long long) p->u->size * p->v->size;
+        if ((long long) i * 100 >= (long long) w->tail * percent) {
+            printf("\rwspd: %3d%% [separate check]", ++ percent);
+        }
     }
-    for (i = 0; i < w->tail - 1; i ++) {
+    printf("\n");
+    assert(total == (long long) net->node_count * (net->node_count - 1));
+    for (i = 0, percent = 0; i < w->tail - 1; i ++) {
         char temp[CLEN], temp2[CLEN];
         pr_z4_code(temp, w->list + i);
         pr_z4_code(temp2, w->list + i + 1);
         assert(strcmp(temp, temp2) == -1);
-    }
-    clock_t time = clock();
-    int times = 0;
-    for (i = 0; i < net->node_count; i += step) {
-        if (net->ind2node[i]->color != net->greatest_component) continue;
-        for (j = 0; j < net->node_count; j += step) {
-            if (net->ind2node[j]->color != net->greatest_component) continue;
-            if (i == j) continue;
-            pair *p = check_query(w, net->ind2node[i], net->ind2node[j]);
-            double e = sphere_dist(net->ind2node[i], net->ind2node[j]);
-            e /= sphere_dist(p->u->data, p->v->data);
-            min = MIN(min, e);
-            max = MAX(max, e);
-            times ++;
+        if ((long long) i * 100 >= (long long) (w->tail - 1) * percent) {
+            printf("\rwspd: %3d%% [order check]", ++ percent);
         }
     }
+    printf("\n");
+    clock_t time = clock();
+    long long times = 0;
+    for (i = 0, percent = 0; i < net->node_count; i += step) {
+        for (j = 0; j < net->node_count; j += step) {
+            if (i == j) continue;
+            pair *p = check_query(w, net->ind2node[i], net->ind2node[j]);
+            double e = w->net->dist[i][j];
+            e /= w->net->dist[p->u->data->node2ind][p->v->data->node2ind];
+            min = MIN(min, e);
+            max = MAX(max, e);
+            if (percent < 10000 && (times ++ * 10000 >= 
+            (long long) net->node_count / step * (net->node_count / step - 1) * percent)) {
+                printf("\rwspd: %5.2lf%% [query check]", (double) ++ percent / 100);
+            }
+        }
+    }
+    printf("\n");
     time = clock() - time;
-    printf("wspd: %lf [wspd error]\n", MAX((1 / min) - 1, 1 - max));
+    printf("wspd: %lf [wspd error]\n", MAX(max - 1, 1 - min));
     printf("wspd: %lf (ms) [query time]\n", (double) time / times);
     printf("wspd: checked\n");
 }
 
-wspd *new_wspd(double eps, network *net) {
+wspd *new_wspd(network *net, double eps) {
     wspd *w = (wspd *) malloc(sizeof(wspd));
-    w->s = 4 / eps;
+    w->net = net;
+    w->s = 2 / eps;
     w->tail = 0; w->size = 256;
     w->list = (pair *) malloc(sizeof(pair) * w->size);
     w->depth = 0;
@@ -383,6 +469,7 @@ wspd *new_wspd(double eps, network *net) {
 }
 
 void clear_wspd() {
+    assert(list_count == 0);
     assert(quad_count == 0);
 }
 
