@@ -415,14 +415,6 @@ void check_network_distance(network *net) {
     }
     network_distance_rad(net, net->ind2node[min_lat], net->ind2node[max_lat]);
     network_distance_rad(net, net->ind2node[min_lon], net->ind2node[max_lon]);
-    double L = 0, R = INF;
-    while (R - L > 1e-6) {
-        double M = (L + R) / 2;
-        bst_node *root = bounded_shortest_paths_from(net, net->ind2node[min_lat], M);
-        if (count / 2 < root->s) R = M; else L = M;
-        free_bst(root);
-    }
-    printf("distance: %lf (m) [half graph]\n", L);
 }
 
 network *new_network_from(const char *name) {

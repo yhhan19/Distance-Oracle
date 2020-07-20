@@ -79,15 +79,21 @@ void shortest_paths_from(network *net, sp_vector *sp, node *source) {
     assert(sp->heap == NULL);
 }
 
-bst_node *bounded_shortest_paths_from(network *net, node *source, double bound) {
+double quad_shortest_paths_from(network *net, node *source, quad_node *q) {
+    double ret;
     bst_node *root = BST_NULL;
     heap_node *heap = new_heap_node(source, 0);
-    while (heap != NULL && heap->key < bound) {
+    int i = 0;
+    while (heap != NULL) {
         node *n = heap->n;
         double key = heap->key;
         n->active = NULL;
         heap = extract_min(heap);
         root = bst_insert(root, n);
+        if (quad_contain(q, n)) {
+            ret = key;
+            if (++ i == q->size) break;
+        }
         adjacent_node *p = net->adjacent_lists[n->node2ind];
         while (p != NULL) {
             edge *e = p->e;
@@ -113,7 +119,8 @@ bst_node *bounded_shortest_paths_from(network *net, node *source, double bound) 
         heap = extract_min(heap);
     }
     assert(heap == NULL);
-    return root;
+    free_bst(root);
+    return ret;
 }
 
 void shortest_paths(network *net) {
@@ -214,11 +221,55 @@ float **read_shortest_paths(network *net) {
 }
 
 void free_matrix(float **a, int N) {
+    if (a == NULL) return ;
     int i;
     for (i = 0; i < N; i ++) {
         if (a[i] != NULL) free(a[i]);
     }
     free(a);
+}
+
+double network_distance(network *net, node *source, node *target) {
+    double ret;
+    bst_node *root = BST_NULL;
+    heap_node *heap = new_heap_node(source, 0);
+    while (heap != NULL) {
+        node *n = heap->n;
+        double key = heap->key;
+        n->active = NULL;
+        heap = extract_min(heap);
+        root = bst_insert(root, n);
+        if (n == target) {
+            ret = key;
+            break;
+        }
+        adjacent_node *p = net->adjacent_lists[n->node2ind];
+        while (p != NULL) {
+            edge *e = p->e;
+            double temp = key + e->weight;
+            if (bst_search(root, e->to->node2id) == NULL) {
+                if (e->to->active == NULL) {
+                    e->to->active = new_heap_node(e->to, temp);
+                    heap = heap_merge(heap, (heap_node *) (e->to->active));
+                }
+                else {
+                    double d = ((heap_node *) e->to->active)->key;
+                    if (temp < d) {
+                        heap = decrease_key(heap, (heap_node *) (e->to->active), temp);
+                    }
+                }
+            }
+            p = p->next;
+        }
+    }
+    while (heap != NULL) {
+        node *n = heap->n;
+        n->active = NULL;
+        heap = extract_min(heap);
+    }
+    assert(heap == NULL);
+    free_bst(root);
+    return ret;
 }
 
 node *nearest_neighbor(network *net, node *n) {
@@ -239,14 +290,12 @@ node *nearest_neighbor(network *net, node *n) {
 }
 
 double network_distance_rad(network *net, node *source, node *target) {
-    node *s0 = nearest_neighbor(net, source);
-    node *t0 = nearest_neighbor(net, target);
     sp_vector *sp = new_sp_vector(net->node_count);
     init_sp_vector(sp);
-    shortest_paths_from(net, sp, s0);
-    printf("distance: %lf (m) [great-circle] ", sphere_dist(s0, t0));
-    printf("%lf (m) [in-network]\n", sp->dist[t0->node2ind]);
-    double ret =  sp->dist[t0->node2ind];
+    shortest_paths_from(net, sp, source);
+    printf("sp: %lf (m) [great-circle] ", sphere_dist(source, target));
+    printf("%lf (m) [in-network]\n", sp->dist[target->node2ind]);
+    double ret =  sp->dist[target->node2ind];
     free_sp_vector(sp);
     return ret;
 }
@@ -263,7 +312,7 @@ double network_distance_deg(network *net,
     sp_vector *sp = new_sp_vector(net->node_count);
     init_sp_vector(sp);
     shortest_paths_from(net, sp, s0);
-    printf("distance: %lf (m) [great-circle] ", sphere_dist(s0, t0));
+    printf("sp: %lf (m) [great-circle] ", sphere_dist(s0, t0));
     printf("%lf (m) [in-network]\n", sp->dist[t0->node2ind]);
     double ret =  sp->dist[t0->node2ind];
     free_sp_vector(sp);

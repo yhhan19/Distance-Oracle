@@ -21,11 +21,9 @@ void clear() {
 void test() {
     network *net = new_network_from("map-beijing-2.osm");
     check_network_distance(net);
-    //shortest_paths(net);
-    //check_shortest_paths(net);
     net->dist = read_shortest_paths(net);
-    wspd *w = new_wspd(net, 0.2);
-    check_wspd(w, net, 10);
+    wspd *w = new_wspd(net, 0.05);
+    check_wspd(w, net, 1);
     free_wspd(w);
     free_matrix(net->dist, net->node_count);
     free_network(net);
@@ -49,4 +47,6 @@ int main() {
     init_sp_vector(sp);
     shortest_paths_from(net, sp, net->ind2node[0]);
     free_sp_vector(sp);
+    //shortest_paths(net);
+    //check_shortest_paths(net);
 */

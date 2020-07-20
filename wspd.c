@@ -17,6 +17,17 @@ quad_node *new_quad_node(wspd *w, quad_node *f, int i) {
     quad_node *n = (quad_node *) malloc(sizeof(quad_node));
     quad_count ++;
     if (f == NULL) {
+        int i;
+        n->p.lat = n->p.lon = PI;
+        n->q.lat = n->q.lon = - PI;
+        for (i = 0; i < w->net->node_count; i ++) {
+            n->p.lat = MIN(n->p.lat, w->net->ind2node[i]->lat);
+            n->q.lat = MAX(n->q.lat, w->net->ind2node[i]->lat);
+            n->p.lon = MIN(n->p.lon, w->net->ind2node[i]->lon);
+            n->q.lon = MAX(n->q.lon, w->net->ind2node[i]->lon);
+        }
+        n->q.lon += 1e-6;
+        n->q.lat += 1e-6;
         n->depth = 0;
         n->code = 0;
     }
@@ -141,6 +152,20 @@ void free_quad(quad_node *root) {
     free_quad_node(root);
 }
 
+void quad_diam(network *net0, network *net1, quad_node *root) {
+    if (root == NULL) return ;
+    if (root->type == WHITE) return ;
+    double d0 = quad_shortest_paths_from(
+        net0, net0->ind2node[root->data->node2ind], root);
+    double d1 = quad_shortest_paths_from(
+        net1, net1->ind2node[root->data->node2ind], root);
+    root->diam = MAX(d0, d1);
+    int i;
+    for (i = 0; i < 4; i ++) {
+        quad_diam(net0, net1, root->child[i]);
+    }
+}
+
 int pair_contain(pair *p, node *a, node *b) {
     return quad_contain(p->u, a) && quad_contain(p->v, b);
 }
@@ -227,29 +252,11 @@ int z4_code_cmp(char *a, char *b) {
     return ca - cb;
 }
 
-int z4_code_cmp_len(char *a, char *b) {
-    char ca, cb;
-    char *pa = a, *pb = b;
-    do {
-        ca = *a ++;
-        cb = *b ++;
-        if (ca == '\0') return a - pa;
-    } while (ca == cb || ca == '4' || cb == '4');
-    return a - pa;
-}
-
 int cmp(wspd *w, node *p, node *q, pair *pr) {
     char ca[CLEN], cb[CLEN];
     pt_z4_code(w, ca, p, q, w->depth);
     pr_z4_code(cb, pr);
     return z4_code_cmp(ca, cb);
-}
-
-int cmp_len(wspd *w, node *p, node *q, pair *pr) {
-    char ca[CLEN], cb[CLEN];
-    pt_z4_code(w, ca, p, q, w->depth);
-    pr_z4_code(cb, pr);
-    return z4_code_cmp_len(ca, cb);
 }
 
 pair *bin_search(wspd *w, node *p, node *q) {
@@ -261,33 +268,13 @@ pair *bin_search(wspd *w, node *p, node *q) {
         if (delta > 0) l = m + 1;
         if (delta == 0) return w->list + m;
     }
-    int i, ret = -1, max = -1;
-    for (i = l - 1; i <= l + 1; i ++) {
-        if (i < 0 || i >= w->tail) continue;
-        int len = cmp_len(w, p, q, w->list + i);
-        if (len > max) {
-            max = len;
-            ret = i;
-        }
-    }
-    /*
-    if (! pair_contain(w->list + ret, p, q)) {
-        char ca[CLEN], cb[CLEN];
-        printf("%d %d\n", p->node2ind, q->node2ind);
-        pt_z4_code(w, ca, p, q, w->depth);
-        pr_z4_code(cb, w->list + ret);
-        printf("%s\n%s\n", ca, cb);
-        scanf("%c");
-    }
-    */
-    return w->list + ret;
-    /*
-    if (pair_contain(w->list + l, p, q))
-        return w->list + l;
     if (l >= 1 && pair_contain(w->list + l - 1, p, q))
         return w->list + l - 1;
+    if (pair_contain(w->list + l, p, q))
+        return w->list + l;
+    if (l < w->tail - 1 && pair_contain(w->list + l + 1, p, q))
+        return w->list + l + 1;
     return NULL;
-    */
 }
 
 void add_pair(wspd *w, quad_node *u, quad_node *v) {
@@ -299,8 +286,7 @@ void add_pair(wspd *w, quad_node *u, quad_node *v) {
             temp[i] = w->list[i];
         free(w->list);
         w->list = temp;
-        if (w->size >= (int) 1e6) 
-            printf("wspd: %d [array expanded]\n", w->size);
+        printf("\rwspd: %d [array expanded]", w->size);
     }
     w->list[w->tail].u = u;
     w->list[w->tail].v = v;
@@ -333,16 +319,20 @@ double node_dist(quad_node *u, quad_node *v) {
     return ret;
 }
 
-int well_separated(quad_node *u, quad_node *v, double s) {
+int well_separated(wspd *w, quad_node *u, quad_node *v) {
     double du = diameter(u), dv = diameter(v);
     double diam = MAX(du, dv);
     double dist = node_dist(u, v);
-    return (dist >= s * diam);
+    return (dist >= w->s * diam);
 }
 
 int net_well_separated(wspd *w, quad_node *u, quad_node *v) {
     double diam = MAX(u->diam, v->diam);
-    double dist = w->net->dist[u->data->node2ind][v->data->node2ind];
+    double dist;
+    if (w->net->dist != NULL) 
+        dist = w->net->dist[u->data->node2ind][v->data->node2ind];
+    else 
+        dist = network_distance(w->net, u->data, v->data);
     return (dist >= w->s * diam);
 }
 
@@ -418,7 +408,7 @@ void check_wspd(wspd *w, network *net, int step) {
             max = MAX(max, e);
             if (percent < 10000 && (times ++ * 10000 >= 
             (long long) net->node_count / step * (net->node_count / step - 1) * percent)) {
-                printf("\rwspd: %5.2lf%% [query check]", (double) ++ percent / 100);
+                printf("\rwspd: %.1lf%% [query check]", (double) ++ percent / 100);
             }
         }
     }
@@ -431,29 +421,23 @@ void check_wspd(wspd *w, network *net, int step) {
 
 wspd *new_wspd(network *net, double eps) {
     wspd *w = (wspd *) malloc(sizeof(wspd));
+    assert(net->component_count == 1);
     w->net = net;
     w->s = 2 / eps;
-    w->tail = 0; w->size = 256;
+    printf("wspd: %.0lf pairs [estimation]\n", w->s * w->s * net->node_count);
+    w->tail = 0; w->size = 65536;
     w->list = (pair *) malloc(sizeof(pair) * w->size);
     w->depth = 0;
+    clock_t time = clock();
     w->root = new_quad_node(w, NULL, -1);
     int i;
-    w->root->p.lat = w->root->p.lon = PI;
-    w->root->q.lat = w->root->q.lon = - PI;
     for (i = 0; i < net->node_count; i ++) {
-        node *n = net->ind2node[i];
-        if (n->color != net->greatest_component) continue;
-        w->root->p.lat = MIN(w->root->p.lat, net->ind2node[i]->lat);
-        w->root->q.lat = MAX(w->root->q.lat, net->ind2node[i]->lat);
-        w->root->p.lon = MIN(w->root->p.lon, net->ind2node[i]->lon);
-        w->root->q.lon = MAX(w->root->q.lon, net->ind2node[i]->lon);
+        quad_insert(w, w->root, net->ind2node[i]);
     }
-    clock_t time = clock();
-    for (i = 0; i < net->node_count; i ++) {
-        node *n = net->ind2node[i];
-        if (n->color == net->greatest_component) {
-            quad_insert(w, w->root, net->ind2node[i]);
-        }
+    if (net->dist == NULL) {
+        network *rnet = reverse_network(net);
+        quad_diam(net, rnet, w->root);
+        free_network(rnet);
     }
     time = clock() - time;
     printf("wspd: %d nodes %d layers [quadtree]\n", w->root->size, w->depth);
@@ -461,6 +445,7 @@ wspd *new_wspd(network *net, double eps) {
     time = clock();
     build(w, w->root, w->root);
     time = clock() - time;
+    printf("\n");
     printf("wspd: %d pairs (%lf)\n", w->tail, 
         (double) w->tail / w->root->size / (w->root->size - 1));
     printf("wspd: %d (ms) [build time]\n", time);
